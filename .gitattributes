@@ -1,0 +1,21 @@
+# Normalize all text files
+* text=auto
+
+# Source code (keep Windows-friendly)
+*.cpp text eol=crlf
+*.h text eol=crlf
+*.hpp text eol=crlf
+
+# Config and data (keep Unix-friendly)
+*.json text eol=lf
+*.pl text eol=lf
+*.gbnf text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+
+# Binary files
+*.gguf binary
+*.dll binary
+*.exe binary
+*.png binary
+*.jpg binary

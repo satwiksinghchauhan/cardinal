@@ -1,0 +1,13 @@
+root ::= object
+object ::= "{" ws pair-confidence ws "," ws pair-reasoning-type ws "," ws pair-uncertainty ws "," ws pair-rule-candidate ws "," ws pair-contradiction ws "," ws pair-domain ws "}"
+pair-confidence ::= "\"confidence\":" ws confidence-value
+pair-reasoning-type ::= "\"reasoning_type\":" ws reasoning-type
+pair-uncertainty ::= "\"uncertainty_flag\":" ws boolean
+pair-rule-candidate ::= "\"rule_candidate_signal\":" ws boolean
+pair-contradiction ::= "\"contradiction_flag\":" ws boolean
+pair-domain ::= "\"reasoning_domain\":" ws reasoning-domain
+confidence-value ::= "1.0" | "0." [0-9] [0-9]? [0-9]? | "0"
+reasoning-type ::= "\"analogical\"" | "\"causal\"" | "\"deductive\"" | "\"inductive\"" | "\"abductive\"" | "\"associative\""
+reasoning-domain ::= "\"factual\"" | "\"ethical\"" | "\"spatial\"" | "\"temporal\"" | "\"social\"" | "\"mathematical\""
+boolean ::= "true" | "false"
+ws ::= ([ \t\n] ws)?
