@@ -3,22 +3,24 @@
 // =============================================================================
 // Cardinal - API Facade Implementation
 // File: src/api/cardinal_api.cpp
+//
+// Changes from original:
+//   - #include "core/llm_engine.h" replaced with "core/backend_factory.h"
+//   - engine_ construction:
+//       was: engine_ = std::make_unique<LLMEngine>(*config_); engine_->load_model();
+//       now: backend_ = BackendFactory::create(*config_); backend_->load_model();
+//   - InferencePipeline constructor arg: *engine_ → *backend_
+//   - Startup log prints backend type and constrained-decoding capability
+//   - Windows preprocessor guards removed (Linux-only build)
+//   - All other logic is identical to original
 // =============================================================================
-
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#endif
-#ifdef ERROR
-#undef ERROR
-#endif
 
 #include "api/cardinal_api.h"
 
-// Core includes -- full definitions needed here
+// Core includes — full definitions needed here
 #include "utils/logger.h"
 #include "utils/json_parser.h"
-#include "core/llm_engine.h"
+#include "core/backend_factory.h"      // ← replaces llm_engine.h
 #include "core/inference.h"
 #include "memory/rule_store.h"
 #include "memory/knowledge_graph.h"
@@ -72,10 +74,10 @@ namespace cardinal {
                 ConfigLoader::load(config_path));
 
             // -- Memory layer --
-            rule_store_ = std::make_unique<RuleStore>(*config_);
+            rule_store_      = std::make_unique<RuleStore>(*config_);
             knowledge_graph_ = std::make_unique<KnowledgeGraph>(*config_);
-            episodic_ = std::make_unique<EpisodicMemory>(*config_);
-            storage_ = std::make_unique<EpisodicStorage>(*config_);
+            episodic_        = std::make_unique<EpisodicMemory>(*config_);
+            storage_         = std::make_unique<EpisodicStorage>(*config_);
 
             rule_store_->load();
             knowledge_graph_->load();
@@ -101,11 +103,25 @@ namespace cardinal {
                 *symbolic_, *extractor_, *neural_verifier_);
             checker_->init();
 
-            // -- LLM --
-            engine_ = std::make_unique<LLMEngine>(*config_);
-            engine_->load_model();
+            // -- LLM Backend --
+            // BackendFactory reads config.backend.type and constructs the right
+            // implementation. This is the only place in the codebase that
+            // knows concrete backend types exist.
+            backend_ = BackendFactory::create(*config_);
+            backend_->load_model();
 
-            pipeline_ = std::make_unique<InferencePipeline>(*config_, *engine_);
+            {
+                auto info = backend_->get_info();
+                LOG_INFO("Backend: " + info.name +
+                         " | model: " + info.model_name +
+                         " | gpu_layers: " + std::to_string(info.gpu_layers) +
+                         " | constrained_decoding: " +
+                         (backend_->supports_constrained_decoding()
+                              ? "native (GBNF)"
+                              : "retry loop (JSON schema)"));
+            }
+
+            pipeline_ = std::make_unique<InferencePipeline>(*config_, *backend_);
             pipeline_->set_retriever(retriever_.get());
 
             // -- API layer --
@@ -147,17 +163,10 @@ namespace cardinal {
         try {
             LOG_INFO("CardinalAPI shutting down...");
 
-            // Final maintenance
-            if (checker_) checker_->run_maintenance();
-
-            // Save rule store
+            if (checker_)    checker_->run_maintenance();
             if (rule_store_) rule_store_->save();
-
-            // Destroy all sessions
-            if (sessions_) sessions_->destroy_all();
-
-            // Close storage
-            if (storage_) storage_->close();
+            if (sessions_)   sessions_->destroy_all();
+            if (storage_)    storage_->close();
 
             initialized_.store(false);
             shutting_down_.store(false);
@@ -187,24 +196,11 @@ namespace cardinal {
 
         std::unique_lock<std::shared_mutex> lock(session_mutex_);
 
-        // If specific ID requested and already exists, return it
         if (!session_id.empty() && sessions_->exists(session_id)) {
             return CardinalResult<std::string>::success(session_id);
         }
 
-        std::string new_id;
-        if (session_id.empty()) {
-            new_id = sessions_->create();
-        }
-        else {
-            // Insert with specific ID
-            new_id = session_id;
-            // SessionManager::create() generates its own ID so we need
-            // to work around this -- create then check
-            // For now create with auto ID if specific ID not found
-            new_id = sessions_->create();
-        }
-
+        std::string new_id = sessions_->create();
         return CardinalResult<std::string>::success(new_id);
     }
 
@@ -255,8 +251,7 @@ namespace cardinal {
                 CardinalStatus::SESSION_NOT_FOUND,
                 "Session not found: " + session_id);
         }
-        return CardinalResult<SessionInfo>::success(
-            session->to_session_info());
+        return CardinalResult<SessionInfo>::success(session->to_session_info());
     }
 
     CardinalResult<std::vector<std::string>>
@@ -277,15 +272,14 @@ namespace cardinal {
 
     CardinalResult<ChatResponse>
         CardinalAPI::chat(const std::string& session_id,
-            const std::string& message)
-    {
+                          const std::string& message) {
         return chat_stream(session_id, message, nullptr);
     }
 
     CardinalResult<ChatResponse>
-        CardinalAPI::chat_stream(const std::string& session_id,
-            const std::string& message,
-            const ApiStreamCallback& stream_cb)
+        CardinalAPI::chat_stream(const std::string&       session_id,
+                                  const std::string&       message,
+                                  const ApiStreamCallback& stream_cb)
     {
         auto check = check_initialized();
         if (!check.ok())
@@ -304,7 +298,6 @@ namespace cardinal {
                 "API is shutting down");
         }
 
-        // Ensure session exists -- create if not
         {
             std::unique_lock<std::shared_mutex> lock(session_mutex_);
             if (!sessions_->exists(session_id)) {
@@ -312,11 +305,9 @@ namespace cardinal {
             }
         }
 
-        // Serialize inference -- one at a time
         std::lock_guard<std::mutex> inf_lock(inference_mutex_);
 
         try {
-            // Get session history
             std::vector<ChatMessage> history;
             {
                 std::shared_lock<std::shared_mutex> lock(session_mutex_);
@@ -324,51 +315,45 @@ namespace cardinal {
                 if (session) history = session->get_history();
             }
 
-            // Build inference request
             InferenceRequest req;
-            req.user_message = message;
-            req.history = history;
+            req.user_message   = message;
+            req.history        = history;
             req.stream_response = (stream_cb != nullptr);
 
-            // Build stream callback bridge
             StreamCallback core_cb = nullptr;
             if (stream_cb) {
                 core_cb = [&stream_cb, &session_id](
                     const std::string& token) -> bool {
                         StreamToken st;
                         st.session_id = session_id;
-                        st.token = token;
-                        st.is_final = false;
+                        st.token      = token;
+                        st.is_final   = false;
                         return stream_cb(st);
                     };
             }
 
-            // Run inference
             auto resp = pipeline_->run(req, core_cb);
 
             if (!resp.success) {
                 return CardinalResult<ChatResponse>::failure(
                     CardinalStatus::INFERENCE_FAILED,
                     resp.error_message.empty()
-                    ? "Inference failed"
-                    : resp.error_message);
+                        ? "Inference failed"
+                        : resp.error_message);
             }
 
-            // Post-inference pipeline
             ChatResponse chat_resp = run_post_inference(
                 session_id, message, resp);
 
-            // If streaming, fire final token with feeling info
             if (stream_cb) {
                 StreamToken final_token;
                 final_token.session_id = session_id;
-                final_token.token = "";
-                final_token.is_final = true;
-                final_token.feeling = chat_resp.feeling;
+                final_token.token      = "";
+                final_token.is_final   = true;
+                final_token.feeling    = chat_resp.feeling;
                 stream_cb(final_token);
             }
 
-            // Update session history
             {
                 std::unique_lock<std::shared_mutex> lock(session_mutex_);
                 auto* session = sessions_->get(session_id);
@@ -382,7 +367,7 @@ namespace cardinal {
         }
         catch (const std::exception& e) {
             LOG_WARN("CardinalAPI::chat_stream exception: " +
-                std::string(e.what()));
+                     std::string(e.what()));
             return CardinalResult<ChatResponse>::failure(
                 CardinalStatus::INTERNAL_ERROR,
                 std::string("Internal error: ") + e.what());
@@ -390,7 +375,7 @@ namespace cardinal {
     }
 
     // =========================================================================
-    // Memory
+    // Memory / verifier
     // =========================================================================
 
     CardinalResult<SystemStats> CardinalAPI::get_stats() const {
@@ -402,33 +387,31 @@ namespace cardinal {
         try {
             SystemStats stats;
 
-            // Memory stats
-            auto ep_stats = storage_->stats();
+            auto ep_stats   = storage_->stats();
             auto rule_stats = rule_store_->stats();
 
-            stats.memory.total_episodes = ep_stats.total_episodes;
-            stats.memory.migrated_episodes = ep_stats.migrated_episodes;
-            stats.memory.high_conf_episodes = ep_stats.high_conf_episodes;
+            stats.memory.total_episodes       = ep_stats.total_episodes;
+            stats.memory.migrated_episodes    = ep_stats.migrated_episodes;
+            stats.memory.high_conf_episodes   = ep_stats.high_conf_episodes;
             stats.memory.rule_candidate_count = ep_stats.rule_candidate_count;
             stats.memory.avg_episode_confidence = ep_stats.avg_confidence;
-            stats.memory.total_rules = rule_stats.total_rules;
-            stats.memory.active_rules = rule_stats.active_rules;
-            stats.memory.avg_rule_confidence = rule_stats.avg_confidence;
-            stats.memory.index_size = retriever_->index_size();
-            stats.memory.vocabulary_size = retriever_->vocabulary_size();
-            stats.memory.index_ready = retriever_->index_ready();
+            stats.memory.total_rules          = rule_stats.total_rules;
+            stats.memory.active_rules         = rule_stats.active_rules;
+            stats.memory.avg_rule_confidence  = rule_stats.avg_confidence;
+            stats.memory.index_size           = retriever_->index_size();
+            stats.memory.vocabulary_size      = retriever_->vocabulary_size();
+            stats.memory.index_ready          = retriever_->index_ready();
 
-            // Verifier stats
-            stats.verifier.total_checks = checker_->total_checks();
-            stats.verifier.total_rules_extracted = checker_->total_rules_extracted();
-            stats.verifier.total_contradictions = checker_->total_contradictions();
-            stats.verifier.total_resolved = checker_->total_resolved();
-            stats.verifier.total_flagged = checker_->total_flagged();
-            stats.verifier.total_maintenance_runs = checker_->total_maintenance_runs();
+            stats.verifier.total_checks            = checker_->total_checks();
+            stats.verifier.total_rules_extracted   = checker_->total_rules_extracted();
+            stats.verifier.total_contradictions    = checker_->total_contradictions();
+            stats.verifier.total_resolved          = checker_->total_resolved();
+            stats.verifier.total_flagged           = checker_->total_flagged();
+            stats.verifier.total_maintenance_runs  = checker_->total_maintenance_runs();
 
             stats.uptime_seconds = uptime_string();
-            stats.version = "0.6.0";
-            stats.initialized = true;
+            stats.version        = "0.6.0";
+            stats.initialized    = true;
 
             return CardinalResult<SystemStats>::success(stats);
         }
@@ -449,9 +432,8 @@ namespace cardinal {
             auto rules = rule_store_->get_all();
             std::vector<RuleInfo> result;
             result.reserve(rules.size());
-            for (const auto& r : rules) {
+            for (const auto& r : rules)
                 result.push_back(to_rule_info(r));
-            }
             return CardinalResult<std::vector<RuleInfo>>::success(result);
         }
         catch (const std::exception& e) {
@@ -463,9 +445,9 @@ namespace cardinal {
 
     CardinalResult<std::vector<EpisodeInfo>>
         CardinalAPI::get_episodes(const std::string& keyword,
-            const std::string& domain,
-            float              min_conf,
-            int                max_results) const
+                                   const std::string& domain,
+                                   float              min_conf,
+                                   int                max_results) const
     {
         auto check = check_initialized();
         if (!check.ok())
@@ -474,18 +456,17 @@ namespace cardinal {
 
         try {
             EpisodeQuery q;
-            q.keyword = keyword;
-            q.domain = domain;
+            q.keyword        = keyword;
+            q.domain         = domain;
             q.min_confidence = min_conf;
-            q.max_results = max_results;
-            q.recent_first = true;
+            q.max_results    = max_results;
+            q.recent_first   = true;
 
             auto episodes = storage_->query(q);
             std::vector<EpisodeInfo> result;
             result.reserve(episodes.size());
-            for (const auto& ep : episodes) {
+            for (const auto& ep : episodes)
                 result.push_back(to_episode_info(ep));
-            }
             return CardinalResult<std::vector<EpisodeInfo>>::success(result);
         }
         catch (const std::exception& e) {
@@ -503,16 +484,16 @@ namespace cardinal {
 
         try {
             int resolved_before = checker_->total_resolved();
-            int flagged_before = checker_->total_flagged();
+            int flagged_before  = checker_->total_flagged();
 
             auto contradictions = checker_->run_full_scan();
 
             ScanResult result;
             result.total_contradictions = static_cast<int>(contradictions.size());
             result.resolved = checker_->total_resolved() - resolved_before;
-            result.flagged = checker_->total_flagged() - flagged_before;
-            result.skipped = result.total_contradictions
-                - result.resolved - result.flagged;
+            result.flagged  = checker_->total_flagged() - flagged_before;
+            result.skipped  = result.total_contradictions
+                              - result.resolved - result.flagged;
 
             if (result.resolved > 0) rule_store_->save();
 
@@ -560,19 +541,19 @@ namespace cardinal {
         try {
             ExportFilter filter;
             filter.min_confidence = request.min_confidence;
-            filter.domain = request.domain;
-            filter.max_examples = request.max_examples;
-            filter.include_rules = request.include_rules;
+            filter.domain         = request.domain;
+            filter.max_examples   = request.max_examples;
+            filter.include_rules  = request.include_rules;
 
             auto stats = exporter_->export_to_file(request.output_path, filter);
 
             ExportInfo info;
             info.episodes_exported = stats.episodes_exported;
-            info.rules_exported = stats.rules_exported;
-            info.total_exported = stats.total_exported;
-            info.avg_confidence = stats.avg_confidence;
-            info.output_path = stats.output_path;
-            info.timestamp = stats.timestamp;
+            info.rules_exported    = stats.rules_exported;
+            info.total_exported    = stats.total_exported;
+            info.avg_confidence    = stats.avg_confidence;
+            info.output_path       = stats.output_path;
+            info.timestamp         = stats.timestamp;
 
             return CardinalResult<ExportInfo>::success(info);
         }
@@ -593,19 +574,19 @@ namespace cardinal {
         try {
             ExportFilter filter;
             filter.min_confidence = request.min_confidence;
-            filter.domain = request.domain;
-            filter.max_examples = request.max_examples;
-            filter.include_rules = request.include_rules;
+            filter.domain         = request.domain;
+            filter.max_examples   = request.max_examples;
+            filter.include_rules  = request.include_rules;
 
             auto stats = exporter_->dry_run(filter);
 
             ExportInfo info;
             info.episodes_exported = stats.episodes_exported;
-            info.rules_exported = stats.rules_exported;
-            info.total_exported = stats.total_exported;
-            info.avg_confidence = stats.avg_confidence;
-            info.output_path = "(dry run)";
-            info.timestamp = stats.timestamp;
+            info.rules_exported    = stats.rules_exported;
+            info.total_exported    = stats.total_exported;
+            info.avg_confidence    = stats.avg_confidence;
+            info.output_path       = "(dry run)";
+            info.timestamp         = stats.timestamp;
 
             return CardinalResult<ExportInfo>::success(info);
         }
@@ -625,7 +606,6 @@ namespace cardinal {
         if (!check.ok())
             return CardinalResult<CardinalSettings>::failure(
                 check.status, check.error_message);
-
         return CardinalResult<CardinalSettings>::success(settings_->get());
     }
 
@@ -638,7 +618,7 @@ namespace cardinal {
 
     CardinalVoidResult
         CardinalAPI::set_setting(const std::string& key,
-            const std::string& value) {
+                                  const std::string& value) {
         auto check = check_initialized();
         if (!check.ok()) return check;
         return settings_->set(key, value);
@@ -669,7 +649,7 @@ namespace cardinal {
     }
 
     std::string CardinalAPI::uptime_string() const {
-        auto now = std::chrono::steady_clock::now();
+        auto now     = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
             now - start_time_).count();
 
@@ -690,11 +670,10 @@ namespace cardinal {
     // =========================================================================
 
     ChatResponse CardinalAPI::run_post_inference(
-        const std::string& session_id,
-        const std::string& user_message,
+        const std::string&       session_id,
+        const std::string&       user_message,
         const InferenceResponse& resp)
     {
-        // Dual-write episode
         std::string ep_id = episodic_->log_episode(
             user_message,
             resp.response,
@@ -704,110 +683,103 @@ namespace cardinal {
             resp.metrics.total_duration.count());
 
         EpisodeRecord record;
-        record.id = ep_id;
-        record.timestamp = JsonParser::current_timestamp();
-        record.user_message = user_message;
+        record.id               = ep_id;
+        record.timestamp        = JsonParser::current_timestamp();
+        record.user_message     = user_message;
         record.response_summary = resp.response;
-        record.confidence = resp.feeling.confidence;
-        record.reasoning_type = resp.feeling.reasoning_type;
+        record.confidence       = resp.feeling.confidence;
+        record.reasoning_type   = resp.feeling.reasoning_type;
         record.reasoning_domain = resp.feeling.reasoning_domain;
-        record.contradiction = resp.feeling.contradiction_flag;
-        record.uncertainty = resp.feeling.uncertainty_flag;
-        record.rule_candidate = resp.feeling.rule_candidate_signal;
-        record.pass1_tokens = resp.metrics.pass1_tokens_generated;
-        record.pass2_tokens = resp.metrics.pass2_tokens_generated;
-        record.total_ms = static_cast<int>(
-            resp.metrics.total_duration.count());
+        record.contradiction    = resp.feeling.contradiction_flag;
+        record.uncertainty      = resp.feeling.uncertainty_flag;
+        record.rule_candidate   = resp.feeling.rule_candidate_signal;
+        record.pass1_tokens     = resp.metrics.pass1_tokens_generated;
+        record.pass2_tokens     = resp.metrics.pass2_tokens_generated;
+        record.total_ms         = static_cast<int>(resp.metrics.total_duration.count());
 
         storage_->insert_episode(record);
         retriever_->notify_new_episode(ep_id);
 
-        // Consistency check
         ConsistencyCheckInput ci;
-        ci.feeling = resp.feeling;
-        ci.user_message = user_message;
+        ci.feeling       = resp.feeling;
+        ci.user_message  = user_message;
         ci.response_text = resp.response;
-        ci.episode_id = ep_id;
+        ci.episode_id    = ep_id;
 
         auto cr = checker_->check(ci);
 
-        // Link rule back to episode if committed
         if (cr.rule_committed && !cr.committed_rule_id.empty()) {
             storage_->set_extracted_rule_id(ep_id, cr.committed_rule_id);
         }
 
-        // Save rule store if dirty
         if (rule_store_->is_dirty()) {
             rule_store_->save();
         }
 
-        // Build ChatResponse
         ChatResponse chat_resp;
-        chat_resp.session_id = session_id;
-        chat_resp.response = resp.response;
-        chat_resp.feeling = to_feeling_info(resp.feeling);
-        chat_resp.episode_id = ep_id;
-        chat_resp.rule_committed = cr.rule_committed;
-        chat_resp.committed_rule_id = cr.committed_rule_id;
-        chat_resp.contradictions_found = static_cast<int>(
-            cr.contradictions.size());
+        chat_resp.session_id              = session_id;
+        chat_resp.response                = resp.response;
+        chat_resp.feeling                 = to_feeling_info(resp.feeling);
+        chat_resp.episode_id              = ep_id;
+        chat_resp.rule_committed          = cr.rule_committed;
+        chat_resp.committed_rule_id       = cr.committed_rule_id;
+        chat_resp.contradictions_found    = static_cast<int>(cr.contradictions.size());
         chat_resp.contradictions_resolved = cr.contradictions_resolved;
-        chat_resp.contradictions_flagged = cr.contradictions_flagged;
-        chat_resp.pass1_tokens = resp.metrics.pass1_tokens_generated;
-        chat_resp.pass2_tokens = resp.metrics.pass2_tokens_generated;
-        chat_resp.total_ms = static_cast<int>(
-            resp.metrics.total_duration.count());
+        chat_resp.contradictions_flagged  = cr.contradictions_flagged;
+        chat_resp.pass1_tokens            = resp.metrics.pass1_tokens_generated;
+        chat_resp.pass2_tokens            = resp.metrics.pass2_tokens_generated;
+        chat_resp.total_ms                = static_cast<int>(resp.metrics.total_duration.count());
 
         LOG_DEBUG("CardinalAPI: ep=" + ep_id +
-            " rule_committed=" + (cr.rule_committed ? "yes" : "no") +
-            " contradictions=" + std::to_string(cr.contradictions.size()));
+                  " rule_committed=" + (cr.rule_committed ? "yes" : "no") +
+                  " contradictions=" + std::to_string(cr.contradictions.size()));
 
         return chat_resp;
     }
 
-    FeelingInfo CardinalAPI::to_feeling_info(const FeelingOutput& f) {
+    FeelingInfo CardinalAPI::to_feeling_info(const FeelingOutput& f) const {
         FeelingInfo info;
-        info.confidence = f.confidence;
-        info.reasoning_type = f.reasoning_type;
-        info.reasoning_domain = f.reasoning_domain;
-        info.uncertainty_flag = f.uncertainty_flag;
+        info.confidence         = f.confidence;
+        info.reasoning_type     = f.reasoning_type;
+        info.reasoning_domain   = f.reasoning_domain;
+        info.uncertainty_flag   = f.uncertainty_flag;
         info.contradiction_flag = f.contradiction_flag;
-        info.rule_candidate = f.rule_candidate_signal;
+        info.rule_candidate     = f.rule_candidate_signal;
         return info;
     }
 
-    RuleInfo CardinalAPI::to_rule_info(const Rule& r) {
+    RuleInfo CardinalAPI::to_rule_info(const Rule& r) const {
         RuleInfo info;
-        info.id = r.id;
-        info.domain = r.domain;
-        info.condition = r.condition;
-        info.consequence = r.consequence;
-        info.confidence = r.confidence;
-        info.trigger_count = r.trigger_count;
-        info.episode_id = r.episode_id;
+        info.id             = r.id;
+        info.domain         = r.domain;
+        info.condition      = r.condition;
+        info.consequence    = r.consequence;
+        info.confidence     = r.confidence;
+        info.trigger_count  = r.trigger_count;
+        info.episode_id     = r.episode_id;
         info.reasoning_type = r.reasoning_type;
-        info.created_at = r.created_at;
-        info.updated_at = r.updated_at;
+        info.created_at     = r.created_at;
+        info.updated_at     = r.updated_at;
         info.has_provenance = r.has_provenance();
         return info;
     }
 
-    EpisodeInfo CardinalAPI::to_episode_info(const EpisodeRecord& ep) {
+    EpisodeInfo CardinalAPI::to_episode_info(const EpisodeRecord& ep) const {
         EpisodeInfo info;
-        info.id = ep.id;
-        info.timestamp = ep.timestamp;
-        info.user_message = ep.user_message;
-        info.response_summary = ep.response_summary;
-        info.confidence = ep.confidence;
-        info.reasoning_type = ep.reasoning_type;
-        info.reasoning_domain = ep.reasoning_domain;
-        info.contradiction = ep.contradiction;
-        info.uncertainty = ep.uncertainty;
-        info.rule_candidate = ep.rule_candidate;
-        info.extracted_rule_id = ep.extracted_rule_id;
-        info.pass1_tokens = ep.pass1_tokens;
-        info.pass2_tokens = ep.pass2_tokens;
-        info.total_ms = ep.total_ms;
+        info.id                  = ep.id;
+        info.timestamp           = ep.timestamp;
+        info.user_message        = ep.user_message;
+        info.response_summary    = ep.response_summary;
+        info.confidence          = ep.confidence;
+        info.reasoning_type      = ep.reasoning_type;
+        info.reasoning_domain    = ep.reasoning_domain;
+        info.contradiction       = ep.contradiction;
+        info.uncertainty         = ep.uncertainty;
+        info.rule_candidate      = ep.rule_candidate;
+        info.extracted_rule_id   = ep.extracted_rule_id;
+        info.pass1_tokens        = ep.pass1_tokens;
+        info.pass2_tokens        = ep.pass2_tokens;
+        info.total_ms            = ep.total_ms;
         return info;
     }
 

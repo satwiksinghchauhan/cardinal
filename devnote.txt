@@ -1,0 +1,34 @@
+follow https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html
+then follow https://catalog.ngc.nvidia.com/orgs/nvidia/teams/tensorrt-llm/containers/devel?version=1.3.0rc13
+https://github.com/NVIDIA/TensorRT-LLM
+
+Yes, exactly. Once you have the engine file, it's just:
+
+1. Put the engine directory in `~/cardinal/models/`
+2. Update `config.json`:
+```json
+"backend": {
+    "type": "tensorrt",
+    "tensorrt": {
+        "engine_path":      "models/qwen2.5-1.5b-engine",
+        "tokenizer_path":   "models/qwen2.5-1.5b-hf",
+        "chat_template":    "qwen3",
+        "max_batch_size":   1,
+        "max_seq_len":      8192,
+        "kv_cache_fraction": 0.5,
+        "use_int8":         false
+    }
+}
+```
+3. Rebuild Cardinal with TRT enabled:
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release \
+    -DCARDINAL_ENABLE_TENSORRT=ON \
+    -DTRT_LLM_INCLUDE_DIR=/usr/local/include \
+    -DTRT_LLM_LIB_DIR=/usr/local/lib
+./build/bin/cardinal
+```
+
+That's genuinely it. The abstraction layer we built means Cardinal doesn't care how the engine was built — it just loads it and calls the executor API.
+
+For now, **keep using llama.cpp**. Your Cardinal v1.1.0 with the full backend abstraction is already working and building clean. The TensorRT backend is there, coded, ready — you just need the engine file when you eventually sort the build environment out. It's not going anywhere.

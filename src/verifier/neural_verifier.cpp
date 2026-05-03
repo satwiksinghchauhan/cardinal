@@ -95,8 +95,8 @@ namespace cardinal {
         // Context parameters — small context, CPU-friendly
         llama_context_params ctx_params = llama_context_default_params();
         ctx_params.n_ctx = 2048;  // Small context — verification prompts are short
-        ctx_params.n_threads = config_.model.threads;
-        ctx_params.n_threads_batch = config_.model.threads;
+        ctx_params.n_threads = config_.backend.llama_cpp.threads;
+        ctx_params.n_threads_batch = config_.backend.llama_cpp.threads;
 
         ctx_ = llama_init_from_model(model_, ctx_params);
         if (!ctx_) {

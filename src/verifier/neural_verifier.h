@@ -22,14 +22,6 @@
 // is_available() == false and ConsistencyChecker falls back to symbolic.
 // =============================================================================
 
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#endif
-#ifdef ERROR
-#undef ERROR
-#endif
-
 #include "utils/config_loader.h"
 #include "utils/json_parser.h"
 

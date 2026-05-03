@@ -4,6 +4,14 @@
 // =============================================================================
 // Cardinal - Config Loader
 // File: src/utils/config_loader.h
+//
+// Changes from original:
+//   - ModelConfig removed from CardinalConfig (fields now inside BackendConfig)
+//   - BackendLlamaCppConfig, BackendTensorRTConfig, BackendConfig added
+//   - CardinalConfig.model replaced with CardinalConfig.backend
+//   - parse_backend() / parse_backend_llama_cpp() / parse_backend_tensorrt()
+//     added to ConfigLoader private interface
+//   - All other structs and methods are identical to original
 // =============================================================================
 
 #include <string>
@@ -12,13 +20,46 @@
 
 namespace cardinal {
 
-    struct ModelConfig {
-        std::string path;
-        std::string chat_template;
+    // -------------------------------------------------------------------------
+    // BackendLlamaCppConfig
+    // Fields previously in ModelConfig, now nested under backend.llama_cpp
+    // -------------------------------------------------------------------------
+    struct BackendLlamaCppConfig {
+        std::string model_path;       // Path to .gguf file
+        std::string chat_template;    // "qwen3", "llama3", "chatml", etc.
         int         context_length;
         int         gpu_layers;
         int         threads;
     };
+
+    // -------------------------------------------------------------------------
+    // BackendTensorRTConfig
+    // -------------------------------------------------------------------------
+    struct BackendTensorRTConfig {
+        std::string engine_path;      // Path to pre-built .engine directory
+        std::string tokenizer_path;   // Path to HuggingFace tokenizer directory
+        std::string chat_template;    // "qwen3", "llama3", "chatml"
+        int         max_batch_size;
+        int         max_seq_len;
+        float       kv_cache_fraction;
+        bool        use_int8;
+    };
+
+    // -------------------------------------------------------------------------
+    // BackendConfig
+    // Top-level backend block. "type" selects which sub-config is active.
+    // Both sub-configs are always parsed so config.json is validated fully
+    // regardless of which backend is currently selected.
+    // -------------------------------------------------------------------------
+    struct BackendConfig {
+        std::string            type;       // "llama_cpp" | "tensorrt"
+        BackendLlamaCppConfig  llama_cpp;
+        BackendTensorRTConfig  tensorrt;
+    };
+
+    // -------------------------------------------------------------------------
+    // All structs below are unchanged from original
+    // -------------------------------------------------------------------------
 
     struct InferenceConfig {
         float temperature;
@@ -73,21 +114,15 @@ namespace cardinal {
         int         cache_rebuild_interval_seconds;
     };
 
-    // -------------------------------------------------------------------------
-    // ApiConfig
-    // Controls the HTTP server used by TypeScript (Interface 2) and
-    // any other external consumers. Auth is optional -- disable for
-    // pure localhost development, enable for any networked deployment.
-    // -------------------------------------------------------------------------
     struct ApiConfig {
-        bool        http_enabled;               // Enable HTTP server on startup
-        std::string host;                       // Bind address (e.g. "127.0.0.1")
-        int         port;                       // Listen port (e.g. 8080)
-        bool        auth_enabled;               // Require API key on all requests
-        std::string api_key;                    // Bearer token for auth
-        bool        stream_enabled;             // Allow SSE streaming responses
-        int         max_request_size_kb;        // Max request body size in KB
-        int         request_timeout_seconds;    // Per-request timeout
+        bool        http_enabled;
+        std::string host;
+        int         port;
+        bool        auth_enabled;
+        std::string api_key;
+        bool        stream_enabled;
+        int         max_request_size_kb;
+        int         request_timeout_seconds;
     };
 
     struct ToolsConfig {
@@ -109,16 +144,19 @@ namespace cardinal {
 
     // -------------------------------------------------------------------------
     // CardinalConfig
+    // Note: `model` field is gone. Use `backend.llama_cpp` or `backend.tensorrt`
+    // depending on `backend.type`. BackendFactory reads `backend.type` to decide
+    // which concrete ILLMBackend to construct.
     // -------------------------------------------------------------------------
     struct CardinalConfig {
-        ModelConfig         model;
+        BackendConfig       backend;          // ← replaces ModelConfig model
         InferenceConfig     inference;
         FeelingSchemaConfig feeling_schema;
         MemoryConfig        memory;
         VerifierConfig      verifier;
         FeedbackConfig      feedback;
         RetrieverConfig     retriever;
-        ApiConfig           api;           // Phase 6 API layer
+        ApiConfig           api;
         ToolsConfig         tools;
         BenchmarkConfig     benchmark;
         LoggingConfig       logging;
@@ -135,14 +173,19 @@ namespace cardinal {
         static std::string    to_json_string(const CardinalConfig& config);
 
     private:
-        static ModelConfig         parse_model(const auto& j);
+        // New backend parsers
+        static BackendConfig          parse_backend(const auto& j);
+        static BackendLlamaCppConfig  parse_backend_llama_cpp(const auto& j);
+        static BackendTensorRTConfig  parse_backend_tensorrt(const auto& j);
+
+        // Unchanged parsers
         static InferenceConfig     parse_inference(const auto& j);
         static FeelingSchemaConfig parse_feeling_schema(const auto& j);
         static MemoryConfig        parse_memory(const auto& j);
         static VerifierConfig      parse_verifier(const auto& j);
         static FeedbackConfig      parse_feedback(const auto& j);
         static RetrieverConfig     parse_retriever(const auto& j);
-        static ApiConfig           parse_api(const auto& j);     // Phase 6
+        static ApiConfig           parse_api(const auto& j);
         static ToolsConfig         parse_tools(const auto& j);
         static BenchmarkConfig     parse_benchmark(const auto& j);
         static LoggingConfig       parse_logging(const auto& j);
