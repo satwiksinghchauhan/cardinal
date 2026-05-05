@@ -11,13 +11,13 @@
     },
 
     "tensorrt": {
-      "engine_path":         "models/qwen-1.2b-engine",
-      "tokenizer_path":      "models/qwen-1.2b-tokenizer",
+      "engine_path":         "models/qwen2.5-1.5b-engine",
+      "tokenizer_path":      "models/qwen2.5-1.5b-hf",
       "chat_template":       "qwen3",
       "max_batch_size":      1,
       "max_seq_len":         8192,
       "kv_cache_fraction":   0.5,
-      "use_int8":            true
+      "use_int8":            false
     }
   },
 
@@ -66,13 +66,13 @@
   },
 
   "retriever": {
-    "mode":                          "hybrid",
-    "keyword_weight":                0.7,
-    "semantic_weight":               0.3,
-    "max_results":                   5,
-    "min_score":                     0.1,
-    "cache_rebuild_strategy":        "on_demand",
-    "cache_rebuild_threshold":       10,
+    "mode":                           "hybrid",
+    "keyword_weight":                 0.7,
+    "semantic_weight":                0.3,
+    "max_results":                    5,
+    "min_score":                      0.1,
+    "cache_rebuild_strategy":         "on_demand",
+    "cache_rebuild_threshold":        10,
     "cache_rebuild_interval_seconds": 300
   },
 
@@ -88,14 +88,89 @@
   },
 
   "tools": {
-    "browser_enabled":     true,
-    "max_browse_depth":    3,
-    "search_results_limit": 5
+    "home_access": true,
+
+    "web_search": {
+      "enabled":               true,
+      "confirmation_required": false,
+      "max_results":           5,
+      "timeout_seconds":       10
+    },
+
+    "web_fetch": {
+      "enabled":               true,
+      "confirmation_required": false,
+      "allowed_domains":       [],
+      "blocked_domains":       [],
+      "timeout_seconds":       15,
+      "max_content_kb":        512
+    },
+
+    "calculator": {
+      "enabled":               true,
+      "confirmation_required": false
+    },
+
+    "run_python": {
+      "enabled":               true,
+      "confirmation_required": true,
+      "sandbox_mode":          "subprocess",
+      "docker_image":          "python:3.12-slim",
+      "timeout_seconds":       30,
+      "memory_limit_mb":       256,
+      "network_enabled":       false
+    },
+
+    "file_read": {
+      "enabled":               true,
+      "confirmation_required": true,
+      "allowed_paths":         ["data/", "logs/", "~/Downloads"]
+    },
+
+    "file_write": {
+      "enabled":               true,
+      "confirmation_required": true,
+      "allowed_paths":         ["data/output/", "~/Downloads"]
+    },
+
+    "knowledge_graph_query": {
+      "enabled":               true,
+      "confirmation_required": false
+    },
+
+    "episodic_search": {
+      "enabled":               true,
+      "confirmation_required": false,
+      "max_results":           5
+    }
+  },
+
+  "agent": {
+    "enabled":                      true,
+    "max_iterations":               10,
+    "max_iterations_hard_cap":      50,
+    "working_memory_path":          "data/memory/agent_working_memory",
+    "working_memory_size":          50,
+    "self_correction_enabled":      true,
+    "self_correction_max_attempts": 3,
+    "plan_before_execute":          true,
+    "summarize_on_cap":             true
+  },
+
+  "explainability": {
+    "enabled":                  true,
+    "audit_log_path":           "data/explainability/audit.db",
+    "signing_enabled":          true,
+    "private_key_path":         "data/explainability/cardinal_private.pem",
+    "public_key_path":          "data/explainability/cardinal_public.pem",
+    "auto_generate_keys":       true,
+    "export_path":              "data/explainability/exports",
+    "attach_trace_to_response": true
   },
 
   "benchmark": {
     "dataset":                  "data/babi_tasks.json",
-    "metrics":                  [ "consistency", "parseability", "accuracy" ],
+    "metrics":                  ["consistency", "parseability", "accuracy"],
     "eval_frequency_seconds":   3600
   },
 

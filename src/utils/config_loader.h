@@ -2,16 +2,14 @@
 // SPDX-FileCopyrightText: Copyright (C) 2026 Satwik Singh (Cardinal AGI)
 #pragma once
 // =============================================================================
-// Cardinal - Config Loader
+// Cardinal - Config Loader (v1.2.0)
 // File: src/utils/config_loader.h
 //
-// Changes from original:
-//   - ModelConfig removed from CardinalConfig (fields now inside BackendConfig)
-//   - BackendLlamaCppConfig, BackendTensorRTConfig, BackendConfig added
-//   - CardinalConfig.model replaced with CardinalConfig.backend
-//   - parse_backend() / parse_backend_llama_cpp() / parse_backend_tensorrt()
-//     added to ConfigLoader private interface
-//   - All other structs and methods are identical to original
+// Changes from v1.1.0:
+//   - ToolsConfig expanded: each tool has its own config struct
+//   - AgentConfig added
+//   - ExplainabilityConfig added
+//   - CardinalConfig gains agent and explainability fields
 // =============================================================================
 
 #include <string>
@@ -21,46 +19,136 @@
 namespace cardinal {
 
     // -------------------------------------------------------------------------
-    // BackendLlamaCppConfig
-    // Fields previously in ModelConfig, now nested under backend.llama_cpp
+    // Backend configs (unchanged from v1.1.0)
     // -------------------------------------------------------------------------
     struct BackendLlamaCppConfig {
-        std::string model_path;       // Path to .gguf file
-        std::string chat_template;    // "qwen3", "llama3", "chatml", etc.
+        std::string model_path;
+        std::string chat_template;
         int         context_length;
         int         gpu_layers;
         int         threads;
     };
 
-    // -------------------------------------------------------------------------
-    // BackendTensorRTConfig
-    // -------------------------------------------------------------------------
     struct BackendTensorRTConfig {
-        std::string engine_path;      // Path to pre-built .engine directory
-        std::string tokenizer_path;   // Path to HuggingFace tokenizer directory
-        std::string chat_template;    // "qwen3", "llama3", "chatml"
+        std::string engine_path;
+        std::string tokenizer_path;
+        std::string chat_template;
         int         max_batch_size;
         int         max_seq_len;
         float       kv_cache_fraction;
         bool        use_int8;
     };
 
-    // -------------------------------------------------------------------------
-    // BackendConfig
-    // Top-level backend block. "type" selects which sub-config is active.
-    // Both sub-configs are always parsed so config.json is validated fully
-    // regardless of which backend is currently selected.
-    // -------------------------------------------------------------------------
     struct BackendConfig {
-        std::string            type;       // "llama_cpp" | "tensorrt"
-        BackendLlamaCppConfig  llama_cpp;
-        BackendTensorRTConfig  tensorrt;
+        std::string           type;
+        BackendLlamaCppConfig llama_cpp;
+        BackendTensorRTConfig tensorrt;
     };
 
     // -------------------------------------------------------------------------
-    // All structs below are unchanged from original
+    // Per-tool config structs (new in v1.2.0)
     // -------------------------------------------------------------------------
+    struct WebSearchToolConfig {
+        bool        enabled               = true;
+        bool        confirmation_required = false;
+        int         max_results           = 5;
+        int         timeout_seconds       = 10;
+    };
 
+    struct WebFetchToolConfig {
+        bool                     enabled               = true;
+        bool                     confirmation_required = false;
+        std::vector<std::string> allowed_domains;
+        std::vector<std::string> blocked_domains;
+        int                      timeout_seconds       = 15;
+        int                      max_content_kb        = 512;
+    };
+
+    struct CalculatorToolConfig {
+        bool enabled               = true;
+        bool confirmation_required = false;
+    };
+
+    struct RunPythonToolConfig {
+        bool        enabled               = true;
+        bool        confirmation_required = true;
+        std::string sandbox_mode          = "subprocess"; // "subprocess" | "docker"
+        std::string docker_image          = "python:3.12-slim";
+        int         timeout_seconds       = 30;
+        int         memory_limit_mb       = 256;
+        bool        network_enabled       = false;
+    };
+
+    struct FileReadToolConfig {
+        bool                     enabled               = true;
+        bool                     confirmation_required = false;
+        std::vector<std::string> allowed_paths;
+    };
+
+    struct FileWriteToolConfig {
+        bool                     enabled               = true;
+        bool                     confirmation_required = true;
+        std::vector<std::string> allowed_paths;
+    };
+
+    struct KnowledgeGraphToolConfig {
+        bool enabled               = true;
+        bool confirmation_required = false;
+    };
+
+    struct EpisodicSearchToolConfig {
+        bool enabled               = true;
+        bool confirmation_required = false;
+        int  max_results           = 5;
+    };
+
+    // -------------------------------------------------------------------------
+    // ToolsConfig (replaces original flat ToolsConfig)
+    // -------------------------------------------------------------------------
+    struct ToolsConfig {
+        WebSearchToolConfig      web_search;
+        WebFetchToolConfig       web_fetch;
+        CalculatorToolConfig     calculator;
+        RunPythonToolConfig      run_python;
+        FileReadToolConfig       file_read;
+        FileWriteToolConfig      file_write;
+        KnowledgeGraphToolConfig knowledge_graph;
+        EpisodicSearchToolConfig episodic_search;
+        bool                     home_access = false;
+    };
+
+    // -------------------------------------------------------------------------
+    // AgentConfig (new in v1.2.0)
+    // -------------------------------------------------------------------------
+    struct AgentConfig {
+        bool        enabled                      = true;
+        int         max_iterations               = 10;
+        int         max_iterations_hard_cap      = 50;
+        std::string working_memory_path          = "data/memory/agent_working_memory";
+        int         working_memory_size          = 50;
+        bool        self_correction_enabled      = true;
+        int         self_correction_max_attempts = 3;
+        bool        plan_before_execute          = true;
+        bool        summarize_on_cap             = true;
+    };
+
+    // -------------------------------------------------------------------------
+    // ExplainabilityConfig (new in v1.2.0)
+    // -------------------------------------------------------------------------
+    struct ExplainabilityConfig {
+        bool        enabled                  = true;
+        std::string audit_log_path           = "data/explainability/audit.db";
+        bool        signing_enabled          = true;
+        std::string private_key_path         = "data/explainability/cardinal_private.pem";
+        std::string public_key_path          = "data/explainability/cardinal_public.pem";
+        bool        auto_generate_keys       = true;
+        std::string export_path              = "data/explainability/exports";
+        bool        attach_trace_to_response = true;
+    };
+
+    // -------------------------------------------------------------------------
+    // Unchanged structs from v1.1.0
+    // -------------------------------------------------------------------------
     struct InferenceConfig {
         float temperature;
         float top_p;
@@ -74,10 +162,10 @@ namespace cardinal {
     };
 
     struct FeelingSchemaConfig {
-        std::string                      type;
-        std::string                      grammar_path;
-        std::vector<FeelingSchemaField>  fields;
-        int                              max_tokens;
+        std::string                     type;
+        std::string                     grammar_path;
+        std::vector<FeelingSchemaField> fields;
+        int                             max_tokens;
     };
 
     struct MemoryConfig {
@@ -125,12 +213,6 @@ namespace cardinal {
         int         request_timeout_seconds;
     };
 
-    struct ToolsConfig {
-        bool browser_enabled;
-        int  max_browse_depth;
-        int  search_results_limit;
-    };
-
     struct BenchmarkConfig {
         std::string              dataset;
         std::vector<std::string> metrics;
@@ -143,23 +225,22 @@ namespace cardinal {
     };
 
     // -------------------------------------------------------------------------
-    // CardinalConfig
-    // Note: `model` field is gone. Use `backend.llama_cpp` or `backend.tensorrt`
-    // depending on `backend.type`. BackendFactory reads `backend.type` to decide
-    // which concrete ILLMBackend to construct.
+    // CardinalConfig (v1.2.0)
     // -------------------------------------------------------------------------
     struct CardinalConfig {
-        BackendConfig       backend;          // ← replaces ModelConfig model
-        InferenceConfig     inference;
-        FeelingSchemaConfig feeling_schema;
-        MemoryConfig        memory;
-        VerifierConfig      verifier;
-        FeedbackConfig      feedback;
-        RetrieverConfig     retriever;
-        ApiConfig           api;
-        ToolsConfig         tools;
-        BenchmarkConfig     benchmark;
-        LoggingConfig       logging;
+        BackendConfig         backend;
+        InferenceConfig       inference;
+        FeelingSchemaConfig   feeling_schema;
+        MemoryConfig          memory;
+        VerifierConfig        verifier;
+        FeedbackConfig        feedback;
+        RetrieverConfig       retriever;
+        ApiConfig             api;
+        ToolsConfig           tools;           // expanded per-tool configs
+        AgentConfig           agent;           // new
+        ExplainabilityConfig  explainability;  // new
+        BenchmarkConfig       benchmark;
+        LoggingConfig         logging;
     };
 
     // -------------------------------------------------------------------------
@@ -173,22 +254,21 @@ namespace cardinal {
         static std::string    to_json_string(const CardinalConfig& config);
 
     private:
-        // New backend parsers
         static BackendConfig          parse_backend(const auto& j);
         static BackendLlamaCppConfig  parse_backend_llama_cpp(const auto& j);
         static BackendTensorRTConfig  parse_backend_tensorrt(const auto& j);
-
-        // Unchanged parsers
-        static InferenceConfig     parse_inference(const auto& j);
-        static FeelingSchemaConfig parse_feeling_schema(const auto& j);
-        static MemoryConfig        parse_memory(const auto& j);
-        static VerifierConfig      parse_verifier(const auto& j);
-        static FeedbackConfig      parse_feedback(const auto& j);
-        static RetrieverConfig     parse_retriever(const auto& j);
-        static ApiConfig           parse_api(const auto& j);
-        static ToolsConfig         parse_tools(const auto& j);
-        static BenchmarkConfig     parse_benchmark(const auto& j);
-        static LoggingConfig       parse_logging(const auto& j);
+        static InferenceConfig        parse_inference(const auto& j);
+        static FeelingSchemaConfig    parse_feeling_schema(const auto& j);
+        static MemoryConfig           parse_memory(const auto& j);
+        static VerifierConfig         parse_verifier(const auto& j);
+        static FeedbackConfig         parse_feedback(const auto& j);
+        static RetrieverConfig        parse_retriever(const auto& j);
+        static ApiConfig              parse_api(const auto& j);
+        static ToolsConfig            parse_tools(const auto& j);       // expanded
+        static AgentConfig            parse_agent(const auto& j);       // new
+        static ExplainabilityConfig   parse_explainability(const auto& j); // new
+        static BenchmarkConfig        parse_benchmark(const auto& j);
+        static LoggingConfig          parse_logging(const auto& j);
     };
 
     class ConfigError : public std::runtime_error {

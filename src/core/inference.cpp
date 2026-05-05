@@ -1,30 +1,30 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: Copyright (C) 2026 Satwik Singh (Cardinal AGI)
 // =============================================================================
-// Cardinal - Inference Pipeline Implementation
+// Cardinal - Inference Pipeline Implementation (v1.2.0)
 // File: src/core/inference.cpp
 //
-// Changes from original:
-//   - #include "core/llm_engine.h" removed (LLMEngine no longer exists)
-//   - #include "core/llm_backend.h" added (ILLMBackend lives here)
-//   - Constructor: LLMEngine& engine → ILLMBackend& backend, engine_ → backend_
-//   - All pipeline logic is identical — zero behavioural changes
+// Changes from v1.1.0:
+//   - Tool loop added to Pass 2
+//   - TraceBuilder used throughout
+//   - Audit log appended at end of each inference
+//   - Extra tools registered per-request then cleaned up
 // =============================================================================
 
 #include "inference.h"
-#include "core/llm_backend.h"               // ILLMBackend, GenerationResult, TokenCallback
+#include "core/llm_backend.h"
 #include "utils/logger.h"
 #include "memory/episodic_retriever.h"
+#include "tools/tool_executor.h"
+#include "tools/tool_registry.h"
+#include "explainability/trace_builder.h"
+#include "explainability/audit_log.h"
 
 #include <thread>
 #include <chrono>
 #include <sstream>
 
 namespace cardinal {
-
-    // =========================================================================
-    // Default system prompt
-    // =========================================================================
 
     const char* InferencePipeline::DEFAULT_SYSTEM_PROMPT =
         "You are Cardinal, a neurosymbolic AI assistant. "
@@ -33,10 +33,6 @@ namespace cardinal {
         "When you encounter patterns that suggest a general rule, you signal this. "
         "Your responses are precise, thoughtful, and grounded in logic.";
 
-    // =========================================================================
-    // Constructor
-    // =========================================================================
-
     InferencePipeline::InferencePipeline(const CardinalConfig& config,
                                          ILLMBackend&          backend)
         : config_(config)
@@ -44,11 +40,11 @@ namespace cardinal {
         , feeling_ctx_(config)
         , system_prompt_(DEFAULT_SYSTEM_PROMPT)
     {
-        LOG_INFO("InferencePipeline initialized");
+        LOG_INFO("InferencePipeline initialized (v1.2.0)");
     }
 
     // =========================================================================
-    // run — full two-pass inference cycle
+    // run
     // =========================================================================
 
     InferenceResponse InferencePipeline::run(const InferenceRequest& request,
@@ -60,38 +56,83 @@ namespace cardinal {
                  " - user: \"" + request.user_message.substr(
                      0, std::min(50, (int)request.user_message.size())) + "...\"");
 
+        // Start trace
+        auto info = backend_.get_info();
+        TraceBuilder trace_builder(
+            "",  // session_id set by caller via ChatResponse
+            info.name,
+            info.model_name);
+
+        trace_builder.record_query(
+            request.agent_mode ? request.goal : request.user_message,
+            request.agent_mode,
+            request.goal);
+
+        trace_builder.record_active_rules(request.active_rules);
+
+        // Register per-request extra tools
+        if (tool_registry_ && !request.extra_tools.empty()) {
+            tool_registry_->register_tools(request.extra_tools);
+        }
+
         feeling_ctx_.reset();
+
+        // Build messages
         auto messages = build_messages(request);
 
-        // ---------------------------------------------------------------------
-        // Pass 1: feeling output (constrained / retry loop depending on backend)
-        // ---------------------------------------------------------------------
-        bool pass1_ok = run_pass1(feeling_ctx_, messages);
+        // -------------------------------------------------------------------------
+        // Pass 1: feeling output
+        // -------------------------------------------------------------------------
+        trace_builder.record_pass1_start();
+        bool pass1_ok = run_pass1(feeling_ctx_, messages, trace_builder);
 
         if (!pass1_ok) {
             ++failed_inferences_;
-            LOG_WARN("Pass 1 failed after " +
-                     std::to_string(config_.feedback.max_retries) + " retries");
-            return build_response(feeling_ctx_, false,
+            LOG_WARN("Pass 1 failed");
+            auto trace = trace_builder.finalize();
+            if (audit_log_) audit_log_->append(trace);
+            return build_response(feeling_ctx_, false, std::move(trace),
                 "Pass 1 failed: could not generate valid feeling output");
         }
 
         LOG_DEBUG("Pass 1 success: " + feeling_ctx_.feeling().to_string());
 
-        // ---------------------------------------------------------------------
-        // Pass 2: final response (free decoding, synthetic turn injected)
-        // ---------------------------------------------------------------------
-        bool pass2_ok = run_pass2(feeling_ctx_, messages, stream_cb);
+        // -------------------------------------------------------------------------
+        // Pass 2: response with tool loop
+        // -------------------------------------------------------------------------
+        trace_builder.record_pass2_start();
+
+        // messages is passed by value so the tool loop can append to it
+        auto mutable_messages = messages;
+        bool pass2_ok = run_pass2(feeling_ctx_, mutable_messages,
+                                   request, stream_cb, trace_builder);
 
         if (!pass2_ok) {
             ++failed_inferences_;
             LOG_WARN("Pass 2 failed");
-            return build_response(feeling_ctx_, false,
+            auto trace = trace_builder.finalize();
+            if (audit_log_) audit_log_->append(trace);
+            return build_response(feeling_ctx_, false, std::move(trace),
                 "Pass 2 failed: could not generate response");
         }
 
+        // Finalize trace
+        trace_builder.record_pass2_complete(
+            feeling_ctx_.final_response(),
+            feeling_ctx_.metrics().pass2_tokens_generated);
+
         LOG_INFO("Inference complete - " + feeling_ctx_.metrics().to_string());
-        return build_response(feeling_ctx_, true);
+
+        auto trace = trace_builder.finalize();
+        if (audit_log_) audit_log_->append(trace);
+
+        // Clean up per-request extra tools
+        if (tool_registry_) {
+            for (const auto& t : request.extra_tools)
+                tool_registry_->unregister_tool(t.name);
+        }
+
+        return build_response(feeling_ctx_, true, std::move(trace));
     }
 
     // =========================================================================
@@ -99,21 +140,30 @@ namespace cardinal {
     // =========================================================================
 
     bool InferencePipeline::run_pass1(FeelingContext&                 ctx,
-                                       const std::vector<ChatMessage>& messages)
+                                       const std::vector<ChatMessage>& messages,
+                                       TraceBuilder&                   trace_builder)
     {
+        int retries = 0;
         while (true) {
             auto result = backend_.generate_feeling(ctx, messages);
 
-            if (result.success && ctx.has_valid_feeling())
+            if (result.success && ctx.has_valid_feeling()) {
+                trace_builder.record_pass1_complete(
+                    ctx.feeling(), true, retries,
+                    result.tokens_generated);
                 return true;
+            }
 
             if (!ctx.should_retry()) {
+                trace_builder.record_pass1_complete(
+                    FeelingOutput{}, false, retries, 0);
                 LOG_WARN("Pass 1 exhausted retries");
                 return false;
             }
 
             ctx.increment_retry();
             ++total_retries_;
+            ++retries;
 
             if (config_.feedback.retry_delay_ms > 0) {
                 std::this_thread::sleep_for(
@@ -125,24 +175,84 @@ namespace cardinal {
     }
 
     // =========================================================================
-    // run_pass2
+    // run_pass2 — with tool loop
     // =========================================================================
 
-    bool InferencePipeline::run_pass2(FeelingContext&                 ctx,
-                                       const std::vector<ChatMessage>& messages,
-                                       const StreamCallback&           stream_cb)
+    bool InferencePipeline::run_pass2(FeelingContext&          ctx,
+                                       std::vector<ChatMessage>& messages,
+                                       const InferenceRequest&   request,
+                                       const StreamCallback&     stream_cb,
+                                       TraceBuilder&             trace_builder)
     {
-        TokenCallback token_cb = nullptr;
-        if (stream_cb) {
-            token_cb = [&stream_cb](const std::string& token_text,
-                                    int /*token_id*/,
-                                    int /*tokens_generated*/) -> bool {
-                return stream_cb(token_text);
-            };
-        }
+        int max_tool_iter = config_.agent.max_iterations;
+        int tool_iter     = 0;
 
-        auto result = backend_.generate_response(ctx, messages, token_cb);
-        return result.success && ctx.has_response();
+        // Inject synthetic turn (feeling state) before generation
+        ctx.prepare_synthetic_turn();
+
+        while (true) {
+            // Generate response
+            TokenCallback token_cb = nullptr;
+            if (stream_cb) {
+                token_cb = [&stream_cb](const std::string& token_text,
+                                        int, int) -> bool {
+                    return stream_cb(token_text);
+                };
+            }
+
+            auto result = backend_.generate_response(ctx, messages, token_cb);
+            if (!result.success) return false;
+
+            // Check for tool calls if tools are enabled
+            if (request.tools_enabled && tool_executor_ &&
+                tool_iter < max_tool_iter)
+            {
+                auto detected = tool_executor_->detect_tool_calls(result.text);
+
+                if (detected.has_tool_calls) {
+                    ++tool_iter;
+                    trace_builder.record_tool_iteration();
+
+                    // Execute all tool calls
+                    auto tool_results = tool_executor_->execute_all(
+                        detected.tool_calls);
+
+                    for (const auto& tr : tool_results)
+                        trace_builder.record_tool_call(tr);
+
+                    // Inject tool results back into context
+                    std::string tool_context =
+                        tool_executor_->format_results_for_context(tool_results);
+
+                    // Append tool results as assistant + user turn
+                    messages.push_back({ "assistant", result.text });
+                    messages.push_back({ "user",
+                        tool_context +
+                        "\nContinue your response based on these tool results." });
+
+                    // Check if any tool requires confirmation (pending)
+                    bool has_pending = false;
+                    for (const auto& tr : tool_results) {
+                        if (tr.pending()) { has_pending = true; break; }
+                    }
+                    if (has_pending) {
+                        // Pause — store partial response and return
+                        ctx.set_final_response(detected.text_before);
+                        ctx.set_state(PassState::COMPLETE);
+                        return true;
+                    }
+
+                    // Loop back — generate response with tool results
+                    continue;
+                }
+            }
+
+            // No tool calls (or tools disabled) — final response
+            ctx.set_final_response(result.text);
+            ctx.set_state(PassState::COMPLETE);
+            ctx.metrics().pass2_tokens_generated = result.tokens_generated;
+            return ctx.has_response();
+        }
     }
 
     // =========================================================================
@@ -155,12 +265,28 @@ namespace cardinal {
         std::vector<ChatMessage> messages;
 
         std::string system_content = system_prompt_;
+
+        // Inject active rules
         if (!request.active_rules.empty()) {
             system_content += "\n\n" + format_rules(request.active_rules);
         }
+
+        // Inject tool definitions
+        if (request.tools_enabled && tool_registry_) {
+            auto tools = tool_registry_->get_enabled_tools();
+            if (!request.extra_tools.empty()) {
+                for (const auto& t : request.extra_tools)
+                    tools.push_back(t);
+            }
+            if (!tools.empty()) {
+                system_content += "\n\n" +
+                    tool_registry_->format_tools_for_prompt(tools);
+            }
+        }
+
         messages.push_back({ "system", system_content });
 
-        // Phase 6: Memory context injection
+        // Memory context injection
         if (retriever_ != nullptr && retriever_->index_ready()) {
             try {
                 auto results = retriever_->retrieve(request.user_message);
@@ -182,8 +308,7 @@ namespace cardinal {
                     }
                 }
             } catch (const std::exception& e) {
-                LOG_WARN("Prompt injection: retrieval failed: " +
-                         std::string(e.what()) + " -- continuing without context");
+                LOG_WARN("Prompt injection failed: " + std::string(e.what()));
             }
         }
 
@@ -191,23 +316,77 @@ namespace cardinal {
             messages.push_back(turn);
 
         messages.push_back({ "user", request.user_message });
+
+        // -------------------------------------------------------------------------
+        // Context budget trimming
+        // Ensures the prompt never exceeds the safe generation budget regardless
+        // of hardware. Trims oldest history turns first, preserving:
+        //   - messages[0]: system prompt (never removed)
+        //   - messages[1..2]: memory context pair (never removed)
+        //   - messages.back(): current user message (never removed)
+        //
+        // Budget = 70% of context length, leaving 30% for generation output.
+        // Token estimate: 1 token per 3.5 chars (conservative for chat templates).
+        // This works on any hardware — on a 128K context GPU it simply never fires.
+        // -------------------------------------------------------------------------
+        const int ctx_len = backend_.get_info().context_length;
+        if (ctx_len > 0) {
+            const int budget = static_cast<int>(ctx_len * 0.70f);
+
+            auto estimate_tokens = [](const std::vector<ChatMessage>& msgs) -> int {
+                int total = 0;
+                for (const auto& m : msgs)
+                    total += static_cast<int>(m.content.size() / 3.5f) + 4; // +4 for role tokens
+                return total;
+            };
+
+            // Find the index of the first trimable turn.
+            // messages[0] = system (fixed)
+            // messages[1..2] = memory context pair if injected (we skip these too)
+            // messages[3..N-1] = conversation history (trimmable)
+            // messages[N] = current user message (fixed)
+            int trim_start = 1;
+            // Skip past memory context pair if present
+            if (messages.size() > 2 &&
+                messages[1].role == "user" &&
+                messages[1].content.find("[MEMORY CONTEXT]") != std::string::npos) {
+                trim_start = 3;
+            }
+
+            int iterations = 0;
+            const int max_trim_iterations = 50; // safety cap
+
+            while (estimate_tokens(messages) > budget &&
+                   static_cast<int>(messages.size()) > trim_start + 2 &&
+                   iterations < max_trim_iterations)
+            {
+                // Remove the oldest trimmable turn (user or assistant)
+                messages.erase(messages.begin() + trim_start);
+                ++iterations;
+            }
+
+            if (iterations > 0) {
+                LOG_DEBUG("Context trimming: removed " + std::to_string(iterations) +
+                          " history turns to fit " + std::to_string(budget) +
+                          " token budget (ctx=" + std::to_string(ctx_len) + ")");
+            }
+        }
+
         return messages;
     }
 
     // =========================================================================
-    // format_rules
+    // format_rules / format_episodes (unchanged from v1.1.0)
     // =========================================================================
 
     std::string InferencePipeline::format_rules(
         const std::vector<Rule>& rules) const
     {
         if (rules.empty()) return "";
-
         std::ostringstream oss;
         oss << "## Active Rules\n";
         oss << "The following rules have been derived from prior reasoning. "
                "Apply them when relevant:\n\n";
-
         for (size_t i = 0; i < rules.size(); ++i) {
             const auto& rule = rules[i];
             oss << (i + 1) << ". [" << rule.domain << "] "
@@ -218,31 +397,23 @@ namespace cardinal {
         return oss.str();
     }
 
-    // =========================================================================
-    // format_episodes
-    // =========================================================================
-
     std::string InferencePipeline::format_episodes(
         const std::vector<RetrievalResult>& results) const
     {
         if (results.empty()) return "";
-
         std::ostringstream oss;
         oss << "The following past interactions are relevant to the current query.\n"
                "Use them as reference context where appropriate:\n\n";
-
         for (size_t i = 0; i < results.size(); ++i) {
             const auto& r  = results[i];
             const auto& ep = r.episode;
             int conf_pct   = static_cast<int>(ep.confidence * 100);
-
             oss << (i + 1) << ". ["
                 << ep.reasoning_domain
                 << " | confidence: " << conf_pct << "%"
                 << " | score: " << static_cast<int>(r.score * 100) << "%"
                 << "]\n";
             oss << "   Q: " << ep.user_message << "\n";
-
             std::string summary = ep.response_summary;
             const size_t MAX_SUMMARY = 300;
             if (summary.size() > MAX_SUMMARY) {
@@ -252,7 +423,6 @@ namespace cardinal {
                 summary = summary.substr(0, cutoff + 1) + "...";
             }
             oss << "   A: " << summary << "\n";
-
             if (i + 1 < results.size()) oss << "\n";
         }
         return oss.str();
@@ -265,12 +435,14 @@ namespace cardinal {
     InferenceResponse InferencePipeline::build_response(
         const FeelingContext& ctx,
         bool                  success,
+        ReasoningTrace        trace,
         const std::string&    error) const
     {
         InferenceResponse resp;
         resp.success       = success;
         resp.error_message = error;
         resp.metrics       = ctx.metrics();
+        resp.trace         = std::move(trace);
 
         if (success && ctx.has_valid_feeling()) {
             resp.feeling  = ctx.feeling();
@@ -280,7 +452,7 @@ namespace cardinal {
     }
 
     // =========================================================================
-    // Context management
+    // Context management / system prompt (unchanged)
     // =========================================================================
 
     void InferencePipeline::reset_context() {
@@ -292,10 +464,6 @@ namespace cardinal {
     bool InferencePipeline::context_near_limit() const {
         return backend_.context_near_limit();
     }
-
-    // =========================================================================
-    // System prompt
-    // =========================================================================
 
     void InferencePipeline::set_system_prompt(const std::string& prompt) {
         system_prompt_ = prompt;

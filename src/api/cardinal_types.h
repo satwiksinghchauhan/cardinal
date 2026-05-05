@@ -23,17 +23,11 @@
 // The API layer translates between core types and these API types.
 // =============================================================================
 
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#endif
-#ifdef ERROR
-#undef ERROR
-#endif
-
 #include <string>
 #include <vector>
-#include <functional> 
+#include <functional>
+#include <optional>
+#include "agent/agent_types.h"
 
 namespace cardinal {
 
@@ -55,6 +49,7 @@ namespace cardinal {
         AUTH_FAILED = 9,   // Invalid or missing API key
         TIMEOUT = 10,  // Operation timed out
         SHUTDOWN = 11,  // API is shutting down
+        NOT_FOUND = 12, // Requested resource not found
         INTERNAL_ERROR = 99   // Unexpected internal error
     };
 
@@ -73,6 +68,7 @@ namespace cardinal {
         case CardinalStatus::AUTH_FAILED:         return "AUTH_FAILED";
         case CardinalStatus::TIMEOUT:             return "TIMEOUT";
         case CardinalStatus::SHUTDOWN:            return "SHUTDOWN";
+        case CardinalStatus::NOT_FOUND:           return "NOT_FOUND";
         case CardinalStatus::INTERNAL_ERROR:      return "INTERNAL_ERROR";
         default:                                  return "UNKNOWN";
         }
@@ -155,6 +151,8 @@ namespace cardinal {
         std::string  response;           // Final response text
         FeelingInfo  feeling;            // Pass 1 introspective state
         std::string  episode_id;         // ID of the logged episode
+        std::string              inference_id;       // for trace lookup
+        std::optional<AgentResult> agent_result;    // set when agent mode
 
         // Verifier outputs
         bool         rule_committed = false;

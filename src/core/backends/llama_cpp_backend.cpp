@@ -43,8 +43,10 @@ namespace cardinal {
 
     llama_context* LlamaCppBackend::create_context() {
         llama_context_params ctx_params = llama_context_default_params();
-        ctx_params.n_ctx         = config_.backend.llama_cpp.context_length;
-        ctx_params.n_threads     = config_.backend.llama_cpp.threads;
+        ctx_params.n_ctx           = config_.backend.llama_cpp.context_length;
+        ctx_params.n_batch         = config_.backend.llama_cpp.context_length;
+        ctx_params.n_ubatch        = 512;
+        ctx_params.n_threads       = config_.backend.llama_cpp.threads;
         ctx_params.n_threads_batch = config_.backend.llama_cpp.threads;
 
         llama_context* ctx = llama_init_from_model(model_, ctx_params);

@@ -41,7 +41,7 @@ static void print_banner(bool http_enabled,
     const std::string& host, int port) {
     std::cout << "\n";
     std::cout << "  +===========================================+\n";
-    std::cout << "  |         C A R D I N A L  v1.1.0           |\n";
+    std::cout << "  |         C A R D I N A L  v1.2.0           |\n";
     std::cout << "  |    Neurosymbolic AGI Architecture         |\n";
     std::cout << "  +===========================================+\n";
     std::cout << "\n";

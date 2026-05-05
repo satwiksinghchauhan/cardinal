@@ -1,8 +1,8 @@
-# Cardinal v1.1.0 — Installation Guide
+# Cardinal v1.2.0 — Installation Guide
 
 **Linux only. Offline builds. Ubuntu 24.04 LTS recommended.**
 
-Cardinal v1.1.0 has removed Windows support. For development and deployment, use Ubuntu 24.04 LTS (or newer LTS). The build is fully offline once dependencies are vendored.
+Cardinal v1.2.0 has removed Windows support. For development and deployment, use Ubuntu 24.04 LTS (or newer LTS). The build is fully offline once dependencies are vendored.
 
 ---
 
@@ -18,6 +18,7 @@ Cardinal v1.1.0 has removed Windows support. For development and deployment, use
   - [Build Cardinal](#build-cardinal)
 - [First Run](#first-run)
 - [Verify the HTTP API](#verify-the-http-api)
+- [Python Sandbox Setup (Optional)](#python-sandbox-setup-optional)
 - [Troubleshooting](#troubleshooting)
 - [Changing the API Key](#changing-the-api-key)
 - [Directory Reference](#directory-reference)
@@ -194,7 +195,27 @@ If you skip the neural verifier, set `verifier.mode` to `"symbolic"` in `config.
 
 ---
 
-### Step 5 — Build Cardinal
+### Step 5 — Build llama.cpp with CUDA
+
+```bash
+cd ~/cardinal/vendor/llama.cpp
+git checkout b8660
+cmake -B build -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j$(nproc)
+```
+
+This will take 10-20 minutes.
+
+Verify:
+```bash
+ls build/bin/
+# Should show: libllama.so, libggml.so, libggml-cuda.so (or similar)
+# Exact names vary by llama.cpp version — .a static libs are also acceptable
+```
+
+---
+
+### Step 6 — Build Cardinal
 
 ```bash
 cd ~/cardinal
@@ -202,9 +223,10 @@ mkdir -p build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
 make -j$(nproc)
 ```
+
 ### Optional: Build with TensorRT Backend
 
-Cardinal v1.1.0 supports NVIDIA TensorRT for optimized inference on supported GPUs.
+Cardinal v1.2.0 supports NVIDIA TensorRT for optimized inference on supported GPUs.
 
 **Prerequisites:**
 - NVIDIA TensorRT installed (typically `/usr/lib/x86_64-linux-gnu/` or `/opt/TensorRT-xxx/`)
@@ -259,7 +281,7 @@ You should see:
 
 ```
   +===========================================+
-  |         C A R D I N A L  v1.1.0           |
+  |         C A R D I N A L  v1.2.0           |
   |    Neurosymbolic AGI Architecture         |
   +===========================================+
 
@@ -296,6 +318,59 @@ curl -X POST http://127.0.0.1:8080/api/chat \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer cardinal-dev-key-change-in-production" \
   -d '{"session_id":"test","message":"What is entropy?"}'
+
+# Agentic request (with tools)
+curl -X POST http://127.0.0.1:8080/api/chat \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer cardinal-dev-key-change-in-production" \
+  -d '{
+    "session_id": "agent-session",
+    "message": "Search the web for DRDO latest news and save to ~/Downloads/drdo_news.txt",
+    "max_iterations": 5
+  }'
+```
+
+---
+
+## Python Sandbox Setup (Optional)
+
+If you intend to use the `run_python` tool (v1.2.0), you have two sandbox options.
+
+### Subprocess Mode (Default)
+
+No additional setup required. Ensure `python3` is installed:
+
+```bash
+sudo apt install python3
+```
+
+### Docker Mode (Production / DRDO)
+
+For full isolation in production deployments:
+
+```bash
+# Install Docker
+sudo apt install docker.io
+sudo systemctl enable --now docker
+
+# Add your user to the docker group
+sudo usermod -aG docker $USER
+newgrp docker
+
+# Verify
+docker run hello-world
+```
+
+Then set in `config.json`:
+
+```json
+"tools": {
+  "run_python": {
+    "enabled": true,
+    "sandbox_mode": "docker",
+    "docker_image": "python:3.12-slim"
+  }
+}
 ```
 
 ---
@@ -369,6 +444,21 @@ The remaining layers run on CPU. Performance decreases but Cardinal works.
 
 ---
 
+### Agentic loop crashes with `max_iterations` (v1.2.0)
+
+Lower the `max_iterations` value in `config.json`:
+
+```json
+"agent": {
+  "max_iterations": 5,
+  "max_iterations_hard_cap": 20
+}
+```
+
+Or, if using the API request, lower the `max_iterations` parameter in the JSON body.
+
+---
+
 ### HTTP server not responding
 
 Check the port is not in use:
@@ -397,6 +487,44 @@ Common causes:
 - Missing model file
 - Wrong grammar path in `config.json`
 - SQLite permission error on `data/memory/` directory
+- Explainability keys missing (first run with `auto_generate_keys: true` fixes this)
+
+---
+
+### `n_ubatch` error in llama.cpp build
+
+Check the log file:
+
+```bash
+cat ~/cardinal/logs/cardinal.log
+```
+
+Common cause:
+- Lower or higher n_ubatch than what the gpu can handle
+
+Fix:
+In `src/core/backends/llama_cpp_backend.cpp`, in `create_context()`, change `ctx_params.n_ubatch` in
+
+```cpp
+ctx_params.n_ctx           = config_.backend.llama_cpp.context_length;
+ctx_params.n_batch         = config_.backend.llama_cpp.context_length;
+ctx_params.n_ubatch        = 512;
+ctx_params.n_threads       = config_.backend.llama_cpp.threads;
+ctx_params.n_threads_batch = config_.backend.llama_cpp.threads;
+```
+
+---
+
+### Docker sandbox permission denied
+
+Ensure your user is in the `docker` group:
+
+```bash
+sudo usermod -aG docker $USER
+newgrp docker
+```
+
+Then restart Cardinal.
 
 ---
 
@@ -433,7 +561,13 @@ To disable auth entirely for local development:
             rules.json
             knowledge.json
             episodes.db
-        training_export.jsonl   (generated on first export)
+            agent_working_memory   (SQLite, created at runtime)
+        explainability/
+            audit.db               (SQLite audit log)
+            cardinal_private.pem   (Ed25519 private key, auto‑generated)
+            cardinal_public.pem    (Ed25519 public key)
+            exports/               (JSON export files)
+        training_export.jsonl      (generated on first export)
     logs/
         cardinal.log
         episodic.log
@@ -441,7 +575,7 @@ To disable auth entirely for local development:
         Qwen_Qwen3.5-4B-Q4_K_M.gguf
         Llama-3.2-1B-Instruct-Q4_K_M.gguf
     scripts/
-        populate_vendor.sh      (optional)
+        populate_vendor.sh         (optional)
     src/
         ...
     vendor/
@@ -468,12 +602,13 @@ To disable auth entirely for local development:
 Once Cardinal is running:
 
 - Read `README.md` for a full architecture overview
+- Read `DOCUMENTATION.md` for the complete API, agentic pipeline, and explainability system
 - Use `/stats` to see memory and verifier state
 - Use `/rules` to watch the rule base grow over time
 - Query past episodes: `GET /api/episodes?keyword=your+query`
 - Export training data: `/export` or `POST /api/export`
+- Export explainability trace: `POST /api/explainability/export`
 
 ---
 
-*If something in this guide is wrong or out of date, the source of truth is always the `CMakeLists.txt` and `config.json` in the repository.*
-
+*If something in this guide is wrong or out of date, the source of truth is always the `CMakeLists.txt`, `config.json`, and source code in the repository.*

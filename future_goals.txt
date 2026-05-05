@@ -1,0 +1,8 @@
+v1.3.0 Native vision encoder
+v1.4.0 SEAL self-improvement
+v1.5.0 Multiple inference / batching
+v1.6.0 Secure API hardening
+v1.7.0 Federated learning (client / server)
+v1.8.0 Voice & Audio
+v1.9.0 Automation & Scheduling
+v2.0.0 Production hardening + formal proof

@@ -1,8 +1,8 @@
-# Cardinal v1.1.0 — Technical Documentation
+# Cardinal v1.2.0 — Technical Documentation
 
-**Architecture:** Neurosymbolic AGI Core
-**Language:** C++20
-**Platform:** Linux (Ubuntu 24.04 LTS)
+**Architecture:** Neurosymbolic AGI Core + Agentic Loop + Explainability  
+**Language:** C++20  
+**Platform:** Linux (Ubuntu 24.04 LTS)  
 **GPU:** NVIDIA CUDA (TensorRT / llama.cpp)
 
 ---
@@ -17,18 +17,21 @@
 6. [Verifier Pipeline](#6-verifier-pipeline)
 7. [Rule System](#7-rule-system)
 8. [Backend Abstraction](#8-backend-abstraction)
-9. [Training Export](#9-training-export)
-10. [Configuration Reference](#10-configuration-reference)
-11. [CardinalAPI Reference](#11-cardinalapi-reference)
-12. [HTTP API Reference](#12-http-api-reference)
-13. [Settings Manager](#13-settings-manager)
-14. [Session Manager](#14-session-manager)
-15. [Type Reference](#15-type-reference)
-16. [Error Handling](#16-error-handling)
-17. [Offline Builds & Vendoring](#17-offline-builds--vendoring)
-18. [Module Reference](#18-module-reference)
-19. [Threading Model](#19-threading-model)
-20. [Lifecycle and Startup Sequence](#20-lifecycle-and-startup-sequence)
+9. [Agentic Pipeline (Unified)](#9-agentic-pipeline-unified)
+10. [Tools System](#10-tools-system)
+11. [Explainability Exports](#11-explainability-exports)
+12. [Training Export](#12-training-export)
+13. [Configuration Reference](#13-configuration-reference)
+14. [CardinalAPI Reference](#14-cardinalapi-reference)
+15. [HTTP API Reference](#15-http-api-reference)
+16. [Settings Manager](#16-settings-manager)
+17. [Session Manager](#17-session-manager)
+18. [Type Reference](#18-type-reference)
+19. [Error Handling](#19-error-handling)
+20. [Offline Builds & Vendoring](#20-offline-builds--vendoring)
+21. [Module Reference](#21-module-reference)
+22. [Threading Model](#22-threading-model)
+23. [Lifecycle and Startup Sequence](#23-lifecycle-and-startup-sequence)
 
 ---
 
@@ -48,9 +51,12 @@ Layer 3 -- API Layer
     SettingsManager    runtime-mutable config
     SessionManager     multi-session conversation state
     TrainingExporter   Alpaca JSONL export
+    Explainability     audit log, cryptographic signing, export API
 
 Layer 2 -- Core Systems
     InferencePipeline  two-pass orchestrator, prompt injection
+    AgentExecutor      PLAN → EXECUTE loop (THINK → ACT → OBSERVE) → FINALIZE
+    ToolExecutor       sandboxed tool execution (subprocess or Docker)
     LLMEngine          abstract backend (llama.cpp / TensorRT)
     ConsistencyChecker verifier orchestrator, auto-resolution
     SymbolicEngine     SWI-Prolog integration
@@ -72,13 +78,16 @@ Layer 1 -- Foundation
 
 `CardinalAPI` owns every component via `std::unique_ptr`. Components are constructed in `init()` and destroyed in `shutdown()`. No component is accessible from outside the API boundary — callers see only the types defined in `cardinal_types.h`.
 
-### Dependency Graph
+### Dependency Graph (v1.2.0)
 
 ```
 CardinalAPI
     owns --> LLMEngine
     owns --> InferencePipeline --> LLMEngine
                                --> EpisodicRetriever
+    owns --> AgentExecutor --> InferencePipeline
+                           --> ToolExecutor
+    owns --> ToolExecutor
     owns --> RuleStore
     owns --> KnowledgeGraph
     owns --> EpisodicMemory
@@ -97,6 +106,7 @@ CardinalAPI
                               --> RuleStore
     owns --> SettingsManager --> EpisodicRetriever
                              --> InferencePipeline
+                             --> AgentExecutor
     owns --> SessionManager
     owns --> HttpServer (separate, explicit start)
 ```
@@ -549,17 +559,333 @@ The GBNF grammar is **only used with llama.cpp**. TensorRT engines are built wit
 
 ---
 
-## 9. Training Export
+## 9. Agentic Pipeline (Unified)
+
+**New in v1.2.0.** Cardinal uses a **unified pipeline** for both chat and agentic modes. The only difference is the `max_iterations` setting. One code path, one audit trail format.
+
+### 9.1 Agent Executor Loop
+
+```
+AgentExecutor::run(goal):
+
+  1. PLAN
+     planner.decompose(goal) → vector<AgentStep>
+     feeling pass on plan → confidence check
+     symbolic check: plan contradicts known rules?
+
+  2. EXECUTE LOOP (i = 0..max_iterations)
+     step = next_pending_step()
+
+     a. THINK
+        LLM generates action for this step
+        tool call detected? → go to b
+        direct response? → go to c
+
+     b. ACT
+        confirmation_required? → pause, notify API
+        tool_executor.execute(tool_call)
+        result → working_memory.store()
+        trace_builder.record_tool_call()
+        success? → mark step done, continue loop
+        failure? → self_correction_attempt()
+                   max_attempts reached? → mark step failed, continue
+
+     c. OBSERVE
+        inject tool results + step history into context
+        LLM generates updated understanding
+        goal_achieved? → go to 3
+        new steps needed? → append to plan
+
+  3. FINALIZE
+     generate final response with full context
+     trace_builder.finalize()
+     audit_log.append(signed_trace)
+     return AgentResult
+```
+
+### 9.2 Tool Execution Loop (Integrated)
+
+The same two-pass inference is used, but Pass 2 now loops:
+
+```
+Pass 1: feeling output (unchanged)
+
+Pass 2 loop:
+  ┌─────────────────────────────────┐
+  │ generate response               │
+  │ detect tool call in output?     │
+  │   yes → execute tool            │
+  │       → inject result to context│
+  │       → iteration < max?        │
+  │           yes → loop back       │
+  │           no  → force final     │
+  │   no  → done, return response   │
+  └─────────────────────────────────┘
+```
+
+### 9.3 Working Memory
+
+Persistent SQLite-backed scratchpad for multi-step tasks. Stored at `data/memory/agent_working_memory`. Enables task resumption after interruption.
+
+### 9.4 Self-Correction
+
+When a tool call fails, the agent can:
+1. Analyse the error
+2. Adjust the plan
+3. Retry the step (up to `self_correction_max_attempts`)
+
+### 9.5 Configuration
+
+```json
+"agent": {
+  "enabled": true,
+  "max_iterations": 10,
+  "max_iterations_hard_cap": 50,
+  "working_memory_path": "data/memory/agent_working_memory",
+  "working_memory_size": 50,
+  "self_correction_enabled": true,
+  "self_correction_max_attempts": 3,
+  "plan_before_execute": true,
+  "summarize_on_cap": true
+}
+```
+
+---
+
+## 10. Tools System
+
+**New in v1.2.0.** Tools are configurable, sandboxed, and support confirmation prompts.
+
+### 10.1 Built-in Tools
+
+| Tool | Description | Confirmation Required | Sandbox |
+|------|-------------|----------------------|---------|
+| `web_search` | DuckDuckGo search, no API key | Configurable | None |
+| `web_fetch` | Fetch and parse a URL | Configurable | None |
+| `calculator` | Safe math expression evaluator | No | None |
+| `run_python` | Python code execution | Yes (default) | Subprocess or Docker |
+| `file_read` | Read from allowed paths | Yes (default) | Path restrictions |
+| `file_write` | Write to allowed paths | Yes (default) | Path restrictions |
+| `knowledge_graph_query` | Query Cardinal's own KG | No | None |
+| `episodic_search` | Search Cardinal's memory | No | None |
+
+### 10.2 Python Sandbox Modes
+
+| Mode | Description | Use Case |
+|------|-------------|----------|
+| `subprocess` | Spawn subprocess with resource limits (ulimit) | Development, quick testing |
+| `docker` | Full container isolation | Production, DRDO/ISRO deployment |
+
+**Sandbox limits (both modes):**
+- `timeout_seconds` — default 30s
+- `memory_limit_mb` — default 256MB
+- `network_enabled` — false by default
+
+### 10.3 Configuration
+
+```json
+"tools": {
+  "home_access": true,
+  "web_search": {
+    "enabled": true,
+    "confirmation_required": false,
+    "max_results": 5,
+    "timeout_seconds": 10
+  },
+  "web_fetch": {
+    "enabled": true,
+    "confirmation_required": false,
+    "allowed_domains": [],
+    "blocked_domains": [],
+    "timeout_seconds": 15,
+    "max_content_kb": 512
+  },
+  "calculator": {
+    "enabled": true,
+    "confirmation_required": false
+  },
+  "run_python": {
+    "enabled": true,
+    "confirmation_required": true,
+    "sandbox_mode": "subprocess",
+    "docker_image": "python:3.12-slim",
+    "timeout_seconds": 30,
+    "memory_limit_mb": 256,
+    "network_enabled": false
+  },
+  "file_read": {
+    "enabled": true,
+    "confirmation_required": true,
+    "allowed_paths": ["data/", "logs/", "~/Downloads"]
+  },
+  "file_write": {
+    "enabled": true,
+    "confirmation_required": true,
+    "allowed_paths": ["data/output/", "~/Downloads"]
+  }
+}
+```
+
+### 10.4 User-Defined Tools (via API)
+
+Callers can register custom tools via the HTTP API per request, following Claude's tools parameter format. Each tool has:
+- `name` — unique identifier
+- `description` — what the tool does (used by LLM for tool selection)
+- `parameters` — JSON schema defining expected arguments
+
+---
+
+## 11. Explainability Exports
+
+**New in v1.2.0.** Every inference produces a signed, tamper-evident trace.
+
+### 11.1 Export Schema
+
+```json
+{
+  "inference_id": "uuid",
+  "timestamp": "2026-05-05T17:00:00Z",
+  "query": "user message",
+  
+  "reasoning_trace": {
+    "feeling_output": {
+      "confidence": 0.87,
+      "reasoning_type": "causal",
+      "reasoning_domain": "factual",
+      "uncertainty_flag": false,
+      "contradiction_flag": false,
+      "rule_candidate_signal": true
+    },
+    "episodes_retrieved": [
+      {
+        "id": "ep_123",
+        "score": 0.85,
+        "user_message": "...",
+        "response_summary": "..."
+      }
+    ],
+    "rules_active": [
+      {
+        "id": "rule_42",
+        "condition": "...",
+        "consequence": "...",
+        "confidence": 0.87
+      }
+    ],
+    "symbolic_checks": {
+      "ran": true,
+      "contradictions_found": 0,
+      "rules_fired": ["rule_42", "rule_17"]
+    },
+    "tool_calls": [
+      {
+        "tool": "web_search",
+        "input": {"query": "DRDO latest news"},
+        "output": "...",
+        "duration_ms": 342,
+        "success": true
+      }
+    ],
+    "pass1_tokens": 87,
+    "pass2_tokens": 312,
+    "total_ms": 1840
+  },
+
+  "rule_committed": {
+    "committed": true,
+    "rule_id": "rule_89",
+    "condition": "...",
+    "consequence": "...",
+    "confidence": 0.82,
+    "reasoning_type": "inductive"
+  },
+
+  "final_response": "...",
+  
+  "integrity": {
+    "hash": "sha256:...",
+    "signature": "ed25519:..."
+  }
+}
+```
+
+### 11.2 Audit Log Storage
+
+SQLite database at `data/explainability/audit.db` with schema:
+
+```sql
+CREATE TABLE traces (
+    id            TEXT PRIMARY KEY,
+    timestamp     TEXT NOT NULL,
+    inference_id  TEXT NOT NULL UNIQUE,
+    session_id    TEXT NOT NULL,
+    user_message  TEXT NOT NULL,
+    trace_json    TEXT NOT NULL,  -- full trace as JSON
+    hash          TEXT NOT NULL,
+    signature     TEXT NOT NULL
+);
+
+CREATE INDEX idx_timestamp ON traces(timestamp);
+CREATE INDEX idx_session ON traces(session_id);
+```
+
+### 11.3 Cryptographic Signing
+
+- **Hash:** SHA256 of the trace JSON
+- **Signature:** Ed25519 (private key in `data/explainability/cardinal_private.pem`)
+- **Auto-generation:** Keys created on first start if `auto_generate_keys: true`
+
+### 11.4 Export API
+
+**POST `/api/explainability/export`**
+
+Request:
+```json
+{
+  "session_id": "my-session",
+  "start_time": "2026-05-01T00:00:00Z",
+  "end_time": "2026-05-05T23:59:59Z",
+  "format": "json"
+}
+```
+
+Response:
+```json
+{
+  "export_id": "exp_123",
+  "trace_count": 42,
+  "download_url": "/api/explainability/download/exp_123.json"
+}
+```
+
+### 11.5 Configuration
+
+```json
+"explainability": {
+  "enabled": true,
+  "audit_log_path": "data/explainability/audit.db",
+  "signing_enabled": true,
+  "private_key_path": "data/explainability/cardinal_private.pem",
+  "public_key_path": "data/explainability/cardinal_public.pem",
+  "auto_generate_keys": true,
+  "export_path": "data/explainability/exports",
+  "attach_trace_to_response": true
+}
+```
+
+---
+
+## 12. Training Export
 
 The training exporter produces Alpaca-format JSONL files suitable for LoRA fine-tuning.
 
-### 9.1 Output Format
+### 12.1 Output Format
 
 ```json
 {"instruction": "What happens to gas molecules when temperature increases?", "input": "", "output": "When temperature increases, gas molecules gain kinetic energy and move faster..."}
 ```
 
-### 9.2 Response Cleaning
+### 12.2 Response Cleaning
 
 Before export:
 - `<think>...</think>` blocks stripped
@@ -567,7 +893,7 @@ Before export:
 - Consecutive newlines collapsed
 - Leading/trailing whitespace trimmed
 
-### 9.3 Rule Export (optional)
+### 12.3 Rule Export (optional)
 
 When `include_rules = true`, rules are exported as:
 
@@ -575,7 +901,7 @@ When `include_rules = true`, rules are exported as:
 {"instruction": "What rule applies when: gas temperature increases?", "input": "", "output": "Gas molecules move faster and pressure increases."}
 ```
 
-### 9.4 Filtering
+### 12.4 Filtering
 
 | Field | Default | Description |
 |-------|---------|-------------|
@@ -586,11 +912,11 @@ When `include_rules = true`, rules are exported as:
 
 ---
 
-## 10. Configuration Reference
+## 13. Configuration Reference
 
 All configuration lives in `config.json`. Every field is validated at startup.
 
-### 10.1 `model` section
+### 13.1 `model` section
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -599,7 +925,7 @@ All configuration lives in `config.json`. Every field is validated at startup.
 | `gpu_layers` | int | Number of layers to offload to GPU (0 = CPU only) |
 | `threads` | int | CPU threads for non-GPU work (>= 1) |
 
-### 10.2 `inference` section
+### 13.2 `inference` section
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -610,13 +936,13 @@ All configuration lives in `config.json`. Every field is validated at startup.
 | `max_retries` | int | Maximum Pass 1 retry attempts (>= 0) |
 | `retry_delay_ms` | int | Milliseconds between retries (>= 0) |
 
-### 10.3 `feeling_schema` section
+### 13.3 `feeling_schema` section
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `grammar_path` | string | Path to the GBNF grammar file |
 
-### 10.4 `memory` section
+### 13.4 `memory` section
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -625,7 +951,7 @@ All configuration lives in `config.json`. Every field is validated at startup.
 | `episodic_log_path` | string | Path to the JSONL episode log |
 | `max_rules` | int | Maximum number of rules in the store (>= 1) |
 
-### 10.5 `verifier` section
+### 13.5 `verifier` section
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -636,7 +962,7 @@ All configuration lives in `config.json`. Every field is validated at startup.
 | `rule_confidence_decay` | float | Confidence reduction per maintenance cycle (>= 0) |
 | `min_rule_confidence` | float | Rules below this are pruned (0.0 to 1.0) |
 
-### 10.6 `retriever` section
+### 13.6 `retriever` section
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -649,7 +975,19 @@ All configuration lives in `config.json`. Every field is validated at startup.
 | `cache_rebuild_threshold` | int | Episodes added before on_demand rebuild (>= 1) |
 | `cache_rebuild_interval_seconds` | int | Seconds between periodic rebuilds (>= 1) |
 
-### 10.7 `api` section
+### 13.7 `tools` section
+
+See Section 10.3 for full schema.
+
+### 13.8 `agent` section
+
+See Section 9.5 for full schema.
+
+### 13.9 `explainability` section
+
+See Section 11.5 for full schema.
+
+### 13.10 `api` section
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -660,7 +998,7 @@ All configuration lives in `config.json`. Every field is validated at startup.
 | `api_key` | string | The Bearer token (required if `auth_enabled` true) |
 | `stream_enabled` | bool | Allow SSE streaming responses |
 
-### 10.8 `logging` section
+### 13.11 `logging` section
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -669,13 +1007,13 @@ All configuration lives in `config.json`. Every field is validated at startup.
 
 ---
 
-## 11. CardinalAPI Reference
+## 14. CardinalAPI Reference
 
 `CardinalAPI` is the single entry point for all interfaces.
 
 **File:** `src/api/cardinal_api.h`
 
-### 11.1 Lifecycle
+### 14.1 Lifecycle
 
 ```cpp
 CardinalAPI api;
@@ -684,7 +1022,7 @@ CardinalVoidResult shutdown();
 bool is_initialized() const;
 ```
 
-### 11.2 Session Management
+### 14.2 Session Management
 
 ```cpp
 CardinalResult<std::string> create_session(const std::string& session_id = "");
@@ -696,7 +1034,7 @@ CardinalResult<std::vector<std::string>> list_sessions() const;
 
 Sessions are created automatically on first `chat()` call if not exist.
 
-### 11.3 Inference
+### 14.3 Inference
 
 ```cpp
 CardinalResult<ChatResponse> chat(
@@ -709,7 +1047,18 @@ CardinalResult<ChatResponse> chat_stream(
     const ApiStreamCallback& stream_cb);
 ```
 
-### 11.4 Memory & Stats
+### 14.4 Agentic Inference (v1.2.0)
+
+```cpp
+CardinalResult<ChatResponse> chat_agentic(
+    const std::string& session_id,
+    const std::string& goal,
+    int max_iterations = 10);
+```
+
+The `max_iterations` parameter overrides the config setting for this request only.
+
+### 14.5 Memory & Stats
 
 ```cpp
 CardinalResult<SystemStats> get_stats() const;
@@ -723,14 +1072,23 @@ CardinalResult<ScanResult> run_scan();
 CardinalVoidResult run_maintenance();
 ```
 
-### 11.5 Training Export
+### 14.6 Training Export
 
 ```cpp
 CardinalResult<ExportInfo> export_training_data(const ExportRequest& request);
 CardinalResult<ExportInfo> export_dry_run(const ExportRequest& request) const;
 ```
 
-### 11.6 Settings
+### 14.7 Explainability (v1.2.0)
+
+```cpp
+CardinalResult<ExportInfo> export_explainability_traces(
+    const std::string& session_id = "",
+    const std::string& start_time = "",
+    const std::string& end_time = "");
+```
+
+### 14.8 Settings
 
 ```cpp
 CardinalResult<CardinalSettings> get_settings() const;
@@ -741,24 +1099,24 @@ CardinalVoidResult reset_settings();
 
 ---
 
-## 12. HTTP API Reference
+## 15. HTTP API Reference
 
 Base URL: `http://127.0.0.1:8080` (configurable)
 
 Authentication: `Authorization: Bearer <api_key>` (except `/api/health`)
 
-### 12.1 GET `/api/health`
+### 15.1 GET `/api/health`
 
 Always public. Returns 200 if server is running.
 
 **Response:**
 ```json
-{"status": "ok", "uptime": "00h 12m 34s", "version": "1.1.0"}
+{"status": "ok", "uptime": "00h 12m 34s", "version": "1.2.0"}
 ```
 
-### 12.2 POST `/api/chat`
+### 15.2 POST `/api/chat`
 
-**Request:**
+**Request (non-agentic):**
 ```json
 {
   "session_id": "my-session",
@@ -767,57 +1125,97 @@ Always public. Returns 200 if server is running.
 }
 ```
 
-**Non-streaming response:** See `ChatResponse` type.
+**Request (agentic, v1.2.0):**
+```json
+{
+  "session_id": "agent-session",
+  "message": "Search the web for DRDO news and save to ~/Downloads/drdo_news.txt",
+  "max_iterations": 5,
+  "stream": true
+}
+```
 
-**Streaming:** Set `"stream": true` or `Accept: text/event-stream`. Each token delivered as SSE event.
+**Non-streaming response:** See `ChatResponse` type (includes `reasoning_trace` if explainability is enabled).
 
-### 12.3 POST `/api/sessions`
+**Streaming:** Set `"stream": true` or `Accept: text/event-stream`. Each token delivered as SSE event. Final event contains full `reasoning_trace` and `integrity` fields.
+
+### 15.3 POST `/api/chat/agentic` (v1.2.0, convenience)
+
+Same as `/api/chat` with `max_iterations` implicitly set (uses config default if not provided).
+
+### 15.4 POST `/api/sessions`
 
 **Request:** `{"session_id": "agent-session-1"}` (optional)
 
 **Response:** `{"status": "ok", "session_id": "agent-session-1"}`
 
-### 12.4 DELETE `/api/sessions/:id`
+### 15.5 DELETE `/api/sessions/:id`
 
 **Response:** `{"status": "ok", "session_id": "agent-session-1", "message": "Session destroyed"}`
 
-### 12.5 GET `/api/stats`
+### 15.6 GET `/api/stats`
 
 Returns complete system statistics (memory, verifier, uptime).
 
-### 12.6 GET `/api/rules`
+### 15.7 GET `/api/rules`
 
 Returns all rules in the rule store.
 
-### 12.7 GET `/api/episodes`
+### 15.8 GET `/api/episodes`
 
 Query parameters: `keyword`, `domain`, `min_conf`, `max_results`.
 
-### 12.8 POST `/api/scan`
+### 15.9 POST `/api/scan`
 
 Run full contradiction scan. **Response:** `{"total_contradictions": 2, "resolved": 1, "flagged": 1, "skipped": 0}`
 
-### 12.9 POST `/api/maintenance`
+### 15.10 POST `/api/maintenance`
 
 Manually trigger maintenance cycle.
 
-### 12.10 GET `/api/settings` / POST `/api/settings`
+### 15.11 GET `/api/settings` / POST `/api/settings`
 
 Get or update runtime settings. Partial JSON accepted.
 
-### 12.11 POST `/api/export`
+### 15.12 POST `/api/export`
 
 Export training data.
 
 **Request:** `{"min_confidence": 0.7, "include_rules": true, "dry_run": false}`
 
+### 15.13 POST `/api/explainability/export` (v1.2.0)
+
+Export signed traces.
+
+**Request:**
+```json
+{
+  "session_id": "my-session",
+  "start_time": "2026-05-01T00:00:00Z",
+  "end_time": "2026-05-05T23:59:59Z"
+}
+```
+
+**Response:**
+```json
+{
+  "export_id": "exp_123",
+  "trace_count": 42,
+  "download_url": "/api/explainability/download/exp_123.json"
+}
+```
+
+### 15.14 GET `/api/explainability/download/:export_id` (v1.2.0)
+
+Download a previously generated export.
+
 ---
 
-## 13. Settings Manager
+## 16. Settings Manager
 
 `SettingsManager` manages runtime-mutable settings. Changes propagate immediately.
 
-### 13.1 Mutable Settings
+### 16.1 Mutable Settings
 
 | Setting | Type | Propagates to |
 |---------|------|---------------|
@@ -832,27 +1230,30 @@ Export training data.
 | `temperature` | float | Validated, stored |
 | `top_p` | float | Validated, stored |
 | `log_level` | string | Logger level |
+| `agent_max_iterations` | int | Next agentic call (default for new sessions) |
+| `agent_self_correction_enabled` | bool | Agent executor |
 
-### 13.2 Validation
+### 16.2 Validation
 
 All settings validated before changes. Updates are atomic.
 
 ---
 
-## 14. Session Manager
+## 17. Session Manager
 
 `SessionManager` owns all active `ConversationSession` objects.
 
-### 14.1 ConversationSession
+### 17.1 ConversationSession
 
 Each session tracks:
 - `session_id`
 - `turn_count` (number of user/assistant pairs)
 - `history` (`std::vector<ChatMessage>`)
+- `working_memory` (SQLite-backed, for agentic sessions)
 - `timestamps` (ISO 8601 for each history entry)
 - `created_at`, `last_active_at`
 
-### 14.2 Context Window Management
+### 17.2 Context Window Management
 
 `estimated_token_count()` provides rough estimate (1 token per 4 characters).
 
@@ -860,7 +1261,7 @@ Each session tracks:
 
 ---
 
-## 15. Type Reference
+## 18. Type Reference
 
 All types in `src/api/cardinal_types.h`. Pybind11-compatible.
 
@@ -871,7 +1272,8 @@ enum class CardinalStatus : int {
     OK = 0, NOT_INITIALIZED = 1, ALREADY_INITIALIZED = 2,
     INFERENCE_FAILED = 3, STORAGE_ERROR = 4, CONFIG_ERROR = 5,
     INVALID_INPUT = 6, EXPORT_FAILED = 7, SESSION_NOT_FOUND = 8,
-    AUTH_FAILED = 9, TIMEOUT = 10, SHUTDOWN = 11, INTERNAL_ERROR = 99
+    AUTH_FAILED = 9, TIMEOUT = 10, SHUTDOWN = 11, TOOL_EXECUTION_FAILED = 12,
+    AGENT_MAX_ITERATIONS_REACHED = 13, INTERNAL_ERROR = 99
 };
 ```
 
@@ -887,26 +1289,27 @@ struct CardinalResult {
 };
 ```
 
-### FeelingInfo, ChatResponse, SessionInfo, RuleInfo, EpisodeInfo, SystemStats, ExportRequest, ExportInfo, CardinalSettings
+### FeelingInfo, ChatResponse, SessionInfo, RuleInfo, EpisodeInfo, SystemStats, ExportRequest, ExportInfo, CardinalSettings, ToolCall, AgentStep, ReasoningTrace, ExplainabilityExport
 
 (Full definitions in `cardinal_types.h`)
 
 ---
 
-## 16. Error Handling
+## 19. Error Handling
 
-### 16.1 API Boundary
+### 19.1 API Boundary
 
 No C++ exceptions cross the `CardinalAPI` boundary. All internal exceptions caught and converted to `CardinalResult<T>`.
 
-### 16.2 Non-Fatal Paths
+### 19.2 Non-Fatal Paths
 
 - Retrieval failure → warning, continue without memory context
 - Neural verifier failure → fall back to symbolic only
 - Contradiction check failure → log, proceed without verification
+- Tool execution failure → mark step failed, continue agent loop (if self-correction enabled)
 - JSONL migration parse errors → skip line, continue
 
-### 16.3 Fatal Paths
+### 19.3 Fatal Paths
 
 These cause `init()` to fail:
 - Config file missing/invalid
@@ -914,14 +1317,15 @@ These cause `init()` to fail:
 - Grammar file missing
 - SQLite database cannot be opened
 - llama.cpp/TensorRT engine fails to load
+- Explainability key generation fails (if `auto_generate_keys: true`)
 
 ---
 
-## 17. Offline Builds & Vendoring
+## 20. Offline Builds & Vendoring
 
 **New in v1.1.0.** Cardinal now supports fully offline builds with vendored dependencies.
 
-### 17.1 Vendored Dependencies
+### 20.1 Vendored Dependencies
 
 Users populate `vendor/` with:
 
@@ -932,18 +1336,19 @@ Users populate `vendor/` with:
 | https://github.com/yhirose/cpp-httplib | `vendor/cpp-httplib` |
 | https://github.com/mlc-ai/tokenizers-cpp | `vendor/tokenizers-cpp` |
 
-### 17.2 Minimal Vendor Structure
+### 20.2 Minimal Vendor Structure
 
 Only source + headers are tracked in Git. No `.git`, `.github`, `tests/`, `examples/`, `docs/`, or build artifacts.
 
-### 17.3 System Dependencies
+### 20.3 System Dependencies
 
 Installed via `apt` (not vendored):
 - `build-essential`, `cmake`
 - `libsqlite3-dev`, `libssl-dev`
 - `swi-prolog`
+- `python3` (for `run_python` tool)
 
-### 17.4 Offline Build Command
+### 20.4 Offline Build Command
 
 ```bash
 mkdir build && cd build
@@ -955,9 +1360,9 @@ No internet required after vendored dependencies are in place.
 
 ---
 
-## 18. Module Reference
+## 21. Module Reference
 
-### 18.1 Logger (`src/utils/logger.h`)
+### 21.1 Logger (`src/utils/logger.h`)
 
 Thread-safe singleton. Levels: TRACE, DEBUG, INFO, WARN, ERROR, FATAL.
 
@@ -966,14 +1371,14 @@ LOG_INFO("message");
 LOG_ERROR("Failed to load model: {}", path);
 ```
 
-### 18.2 ConfigLoader (`src/utils/config_loader.h`)
+### 21.2 ConfigLoader (`src/utils/config_loader.h`)
 
 ```cpp
 auto config = ConfigLoader::load("config.json");
 ConfigLoader::validate(config);
 ```
 
-### 18.3 JsonParser (`src/utils/json_parser.h`)
+### 21.3 JsonParser (`src/utils/json_parser.h`)
 
 ```cpp
 FeelingOutput feeling = JsonParser::parse_feeling_output(json_str);
@@ -982,22 +1387,41 @@ JsonParser::save_rules(path, rules);
 std::string id = JsonParser::generate_id();
 ```
 
-### 18.4 LLMEngine (`src/core/llm_engine.h`)
+### 21.4 LLMEngine (`src/core/llm_engine.h`)
 
 Abstract interface. Implementations: `LlamaCppEngine`, `TensorRTEngine`.
 
-### 18.5 InferencePipeline (`src/core/inference.h`)
+### 21.5 InferencePipeline (`src/core/inference.h`)
 
 ```cpp
 InferenceRequest req;
 req.user_message = message;
 req.history = session.get_history();
 req.active_rules = rule_store.query(...);
+req.max_iterations = is_agentic ? config.max_iterations : 0;
 
 InferenceResponse resp = pipeline.run(req, stream_callback);
 ```
 
-### 18.6 EpisodicRetriever (`src/memory/episodic_retriever.h`)
+If `max_iterations > 0`, the pipeline runs in agentic mode.
+
+### 21.6 AgentExecutor (`src/agent/agent_executor.h`)
+
+**New in v1.2.0.**
+
+```cpp
+AgentResult result = executor.run(goal, max_iterations);
+```
+
+### 21.7 ToolExecutor (`src/tools/tool_executor.h`)
+
+**New in v1.2.0.**
+
+```cpp
+ToolResult result = executor.execute(tool_call);
+```
+
+### 21.8 EpisodicRetriever (`src/memory/episodic_retriever.h`)
 
 ```cpp
 auto results = retriever.retrieve("What is entropy?");
@@ -1005,13 +1429,13 @@ retriever.notify_new_episode(ep_id);
 retriever.set_mode(RetrievalMode::HYBRID);
 ```
 
-### 18.7 RuleExtractor (`src/verifier/rule_extractor.h`)
+### 21.9 RuleExtractor (`src/verifier/rule_extractor.h`)
 
 ```cpp
 ExtractionResult result = extractor.extract(input);
 ```
 
-### 18.8 ConsistencyChecker (`src/verifier/consistency_check.h`)
+### 21.10 ConsistencyChecker (`src/verifier/consistency_check.h`)
 
 ```cpp
 ConsistencyCheckResult result = checker.check(input);
@@ -1019,18 +1443,29 @@ auto contradictions = checker.run_full_scan();
 int removed = checker.run_maintenance();
 ```
 
-### 18.9 TrainingExporter (`src/learning/training_exporter.h`)
+### 21.11 TrainingExporter (`src/learning/training_exporter.h`)
 
 ```cpp
 ExportFilter filter{.min_confidence = 0.7f, .include_rules = true};
 auto stats = exporter.export_to_file("output.jsonl", filter);
 ```
 
+### 21.12 ExplainabilityManager (`src/explainability/manager.h`)
+
+**New in v1.2.0.**
+
+```cpp
+auto trace = manager.build_trace(inference_id, request, response, reasoning_trace);
+manager.save_trace(trace);
+manager.sign_trace(trace);
+auto export_id = manager.export_traces(session_id, start_time, end_time);
+```
+
 ---
 
-## 19. Threading Model
+## 22. Threading Model
 
-### 19.1 Component Thread Safety
+### 22.1 Component Thread Safety
 
 | Component | Mechanism |
 |-----------|-----------|
@@ -1041,23 +1476,30 @@ auto stats = exporter.export_to_file("output.jsonl", filter);
 | `SettingsManager` | `std::shared_mutex` |
 | `SessionManager` | `std::mutex` on map operations |
 | `ConsistencyChecker` | `std::mutex` on `check()` |
+| `ToolExecutor` | `std::mutex` (state changes only, execution is parallel across tools) |
+| `ExplainabilityManager` | `std::mutex` on audit log writes |
 | `CardinalAPI` | Multiple mutexes (see below) |
 
-### 19.2 CardinalAPI Mutexes
+### 22.2 CardinalAPI Mutexes
 
 - **`inference_mutex_`** (`std::mutex`) — Serializes all inference. Only one at a time.
+- **`agent_mutex_`** (`std::mutex`) — Serialises agentic loops (separate from chat inference to allow concurrent non-agentic requests).
 - **`session_mutex_`** (`std::shared_mutex`) — Protects session map.
 - **`api_mutex_`** (`std::mutex`) — Protects init/shutdown.
 
-### 19.3 HTTP Server Threading
+### 22.3 HTTP Server Threading
 
-`cpp-httplib` handles one request at a time. Read-only endpoints (`/api/stats`, `/api/rules`, etc.) do not hold `inference_mutex_`. Chat endpoints hold `inference_mutex_` for the entire inference.
+`cpp-httplib` handles one request at a time. Read-only endpoints (`/api/stats`, `/api/rules`, etc.) do not hold `inference_mutex_`. Chat endpoints hold `inference_mutex_` for the entire inference. Agentic endpoints hold `agent_mutex_`.
+
+### 22.4 Tool Execution Threading
+
+Tool calls are executed on the main inference thread (agent loop owns the execution). This is intentional — no parallelism within a single agent loop, simplifying state management.
 
 ---
 
-## 20. Lifecycle and Startup Sequence
+## 23. Lifecycle and Startup Sequence
 
-### 20.1 Full Startup Sequence
+### 23.1 Full Startup Sequence
 
 ```
 main()
@@ -1076,6 +1518,9 @@ main()
         +-- ConsistencyChecker::init()
         +-- LLMEngine::load_model() (llama.cpp or TensorRT)
         +-- InferencePipeline init
+        +-- AgentExecutor init
+        +-- ToolExecutor init
+        +-- ExplainabilityManager::init() (if enabled)
         +-- TrainingExporter init
         +-- SettingsManager init
         +-- SessionManager init, default session created
@@ -1086,7 +1531,7 @@ main()
   +-- interactive loop
 ```
 
-### 20.2 Per-Inference Sequence
+### 23.2 Per-Inference Sequence (Chat Mode)
 
 ```
 chat_stream()
@@ -1100,12 +1545,33 @@ chat_stream()
   +-- retriever.notify_new_episode()
   +-- consistency check + rule extraction + contradiction resolution
   +-- if rule committed: storage.set_extracted_rule_id()
+  +-- if explainability enabled: build, sign, save trace
   +-- if rule store dirty: rule_store.save()
   +-- release inference_mutex_
   +-- update session history
 ```
 
-### 20.3 Shutdown Sequence
+### 23.3 Per-Inference Sequence (Agentic Mode)
+
+```
+chat_agentic()
+  |
+  +-- acquire agent_mutex_
+  +-- ensure session exists
+  +-- AgentExecutor::run(goal)
+        |
+        +-- PLAN: decompose goal, feeling check, symbolic check
+        +-- EXECUTE LOOP (i = 0..max_iterations)
+        |     |
+        |     +-- THINK: InferencePipeline (single step, no agent loop inside)
+        |     +-- ACT: ToolExecutor.execute()
+        |     +-- OBSERVE: inject results, update understanding
+        +-- FINALIZE: generate final response
+  +-- trace saved to audit log (if explainability enabled)
+  +-- release agent_mutex_
+```
+
+### 23.4 Shutdown Sequence
 
 ```
 CardinalAPI::shutdown()
@@ -1113,6 +1579,8 @@ CardinalAPI::shutdown()
   +-- acquire api_mutex_
   +-- checker.run_maintenance()
   +-- rule_store.save()
+  +-- agent_working_memory close (flush)
+  +-- explainability_audit close
   +-- sessions.destroy_all()
   +-- storage.close() (WAL checkpoint)
   +-- initialized = false
@@ -1120,4 +1588,4 @@ CardinalAPI::shutdown()
 
 ---
 
-*This documentation reflects Cardinal v1.1.0. The source of truth is always the source code.*
+*This documentation reflects Cardinal v1.2.0. The source of truth is always the source code.*
