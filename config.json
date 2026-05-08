@@ -1,181 +1,183 @@
 {
   "backend": {
     "type": "llama_cpp",
-
     "llama_cpp": {
-      "model_path":      "models/Qwen_Qwen3.5-4B-Q4_K_M.gguf",
-      "chat_template":   "qwen3",
-      "context_length":  8192,
-      "gpu_layers":      24,
-      "threads":         8
+      "model_path": "models/Qwen_Qwen3.5-4B-Q4_K_M.gguf",
+      "chat_template": "qwen3",
+      "context_length": 8192,
+      "gpu_layers": 33,
+      "threads": 8
     },
-
     "tensorrt": {
-      "engine_path":         "models/qwen2.5-1.5b-engine",
-      "tokenizer_path":      "models/qwen2.5-1.5b-hf",
-      "chat_template":       "qwen3",
-      "max_batch_size":      1,
-      "max_seq_len":         8192,
-      "kv_cache_fraction":   0.5,
-      "use_int8":            false
+      "engine_path": "models/qwen2.5-1.5b-engine",
+      "tokenizer_path": "models/qwen2.5-1.5b-hf",
+      "chat_template": "qwen3",
+      "max_batch_size": 1,
+      "max_seq_len": 8192,
+      "kv_cache_fraction": 0.5,
+      "use_int8": false
     }
   },
-
   "inference": {
-    "temperature":          0.7,
-    "top_p":                0.9,
-    "max_tokens_feeling":   256,
-    "max_tokens_response":  1024
+    "temperature": 0.7,
+    "top_p": 0.9,
+    "max_tokens_feeling": 256,
+    "max_tokens_response": 1024
   },
-
   "feeling_schema": {
-    "type":         "structured_json",
+    "type": "structured_json",
     "grammar_path": "src/prompts/feeling_schema.gbnf",
     "fields": {
-      "confidence":            "float (0-1)",
-      "reasoning_type":        "string (analogical|causal|deductive|inductive|abductive|associative)",
-      "uncertainty_flag":      "boolean",
+      "confidence": "float (0-1)",
+      "reasoning_type": "string (analogical|causal|deductive|inductive|abductive|associative)",
+      "uncertainty_flag": "boolean",
       "rule_candidate_signal": "boolean",
-      "contradiction_flag":    "boolean",
-      "reasoning_domain":      "string (factual|ethical|spatial|temporal|social|mathematical)"
+      "contradiction_flag": "boolean",
+      "reasoning_domain": "string (factual|ethical|spatial|temporal|social|mathematical)"
     },
     "max_tokens": 256
   },
-
   "memory": {
-    "rule_store_path":       "data/memory/rules.json",
-    "knowledge_graph_path":  "data/memory/knowledge.json",
-    "episodic_log_path":     "logs/episodic.log",
-    "max_rules":             1000
+    "rule_store_path": "data/memory/rules.json",
+    "knowledge_graph_path": "data/memory/knowledge.json",
+    "episodic_log_path": "logs/episodic.log",
+    "max_rules": 1000
   },
-
   "verifier": {
-    "mode":                    "symbolic",
-    "neural_model_path":       "",
-    "neural_gpu_layers":       0,
-    "neural_max_tokens":       512,
+    "mode": "symbolic",
+    "neural_model_path": "",
+    "neural_gpu_layers": 0,
+    "neural_max_tokens": 512,
     "contradiction_threshold": 0.75,
-    "rule_confidence_decay":   0.01,
-    "min_rule_confidence":     0.3
+    "rule_confidence_decay": 0.01,
+    "min_rule_confidence": 0.3
   },
-
   "feedback": {
-    "max_retries":            3,
-    "retry_delay_ms":         100,
-    "rule_injection_format":  "prepend_to_context"
+    "max_retries": 3,
+    "retry_delay_ms": 100,
+    "rule_injection_format": "prepend_to_context"
   },
-
   "retriever": {
-    "mode":                           "hybrid",
-    "keyword_weight":                 0.7,
-    "semantic_weight":                0.3,
-    "max_results":                    5,
-    "min_score":                      0.1,
-    "cache_rebuild_strategy":         "on_demand",
-    "cache_rebuild_threshold":        10,
+    "mode": "hybrid",
+    "keyword_weight": 0.7,
+    "semantic_weight": 0.3,
+    "max_results": 5,
+    "min_score": 0.1,
+    "cache_rebuild_strategy": "on_demand",
+    "cache_rebuild_threshold": 10,
     "cache_rebuild_interval_seconds": 300
   },
-
   "api": {
-    "http_enabled":            true,
-    "host":                    "127.0.0.1",
-    "port":                    8080,
-    "auth_enabled":            true,
-    "api_key":                 "secret_api_key",
-    "stream_enabled":          true,
-    "max_request_size_kb":     1024,
+    "http_enabled": true,
+    "host": "127.0.0.1",
+    "port": 8080,
+    "auth_enabled": true,
+    "api_key": "secret_api_key",
+    "stream_enabled": true,
+    "max_request_size_kb": 1024,
     "request_timeout_seconds": 120
   },
-
   "tools": {
-    "home_access": true,
-
     "web_search": {
-      "enabled":               true,
+      "enabled": true,
       "confirmation_required": false,
-      "max_results":           5,
-      "timeout_seconds":       10
+      "max_results": 5,
+      "timeout_seconds": 10
     },
-
     "web_fetch": {
-      "enabled":               true,
+      "enabled": true,
       "confirmation_required": false,
-      "allowed_domains":       [],
-      "blocked_domains":       [],
-      "timeout_seconds":       15,
-      "max_content_kb":        512
+      "allowed_domains": [],
+      "blocked_domains": [],
+      "timeout_seconds": 15,
+      "max_content_kb": 512
     },
-
     "calculator": {
-      "enabled":               true,
+      "enabled": true,
       "confirmation_required": false
     },
-
     "run_python": {
-      "enabled":               true,
+      "enabled": true,
       "confirmation_required": true,
-      "sandbox_mode":          "subprocess",
-      "docker_image":          "python:3.12-slim",
-      "timeout_seconds":       30,
-      "memory_limit_mb":       256,
-      "network_enabled":       false
+      "sandbox_mode": "subprocess",
+      "docker_image": "python:3.12-slim",
+      "timeout_seconds": 30,
+      "memory_limit_mb": 256,
+      "network_enabled": false
     },
-
     "file_read": {
-      "enabled":               true,
-      "confirmation_required": true,
-      "allowed_paths":         ["data/", "logs/", "~/Downloads"]
+      "enabled": true,
+      "confirmation_required": false,
+      "allowed_paths": [
+        "data/",
+        "logs/"
+      ]
     },
-
     "file_write": {
-      "enabled":               true,
+      "enabled": true,
       "confirmation_required": true,
-      "allowed_paths":         ["data/output/", "~/Downloads"]
+      "allowed_paths": [
+        "data/output/"
+      ]
     },
-
     "knowledge_graph_query": {
-      "enabled":               true,
+      "enabled": true,
       "confirmation_required": false
     },
-
     "episodic_search": {
-      "enabled":               true,
+      "enabled": true,
       "confirmation_required": false,
-      "max_results":           5
+      "max_results": 5
     }
   },
-
   "agent": {
-    "enabled":                      true,
-    "max_iterations":               10,
-    "max_iterations_hard_cap":      50,
-    "working_memory_path":          "data/memory/agent_working_memory",
-    "working_memory_size":          50,
-    "self_correction_enabled":      true,
+    "enabled": true,
+    "max_iterations": 10,
+    "max_iterations_hard_cap": 50,
+    "working_memory_path": "data/memory/agent_working_memory",
+    "working_memory_size": 50,
+    "self_correction_enabled": true,
     "self_correction_max_attempts": 3,
-    "plan_before_execute":          true,
-    "summarize_on_cap":             true
+    "plan_before_execute": true,
+    "summarize_on_cap": true
   },
-
   "explainability": {
-    "enabled":                  true,
-    "audit_log_path":           "data/explainability/audit.db",
-    "signing_enabled":          true,
-    "private_key_path":         "data/explainability/cardinal_private.pem",
-    "public_key_path":          "data/explainability/cardinal_public.pem",
-    "auto_generate_keys":       true,
-    "export_path":              "data/explainability/exports",
+    "enabled": true,
+    "audit_log_path": "data/explainability/audit.db",
+    "signing_enabled": true,
+    "private_key_path": "data/explainability/cardinal_private.pem",
+    "public_key_path": "data/explainability/cardinal_public.pem",
+    "auto_generate_keys": true,
+    "export_path": "data/explainability/exports",
     "attach_trace_to_response": true
   },
-
   "benchmark": {
-    "dataset":                  "data/babi_tasks.json",
-    "metrics":                  ["consistency", "parseability", "accuracy"],
-    "eval_frequency_seconds":   3600
+    "dataset": "data/babi_tasks.json",
+    "metrics": [
+      "consistency",
+      "parseability",
+      "accuracy"
+    ],
+    "eval_frequency_seconds": 3600
   },
-
   "logging": {
     "level": "info",
-    "path":  "logs/cardinal.log"
+    "path": "logs/cardinal.log"
+  },
+  "vision": {
+    "model_path": "models/vision/moondream2-text-model-Q4_K_M.gguf",
+    "mmproj_path": "models/vision/moondream2-mmproj-f16.gguf",
+    "gpu_layers": 0,
+    "threads": 4,
+    "max_tokens": 512,
+    "cache_path": "data/vision_cache",
+    "cache_ttl_hours": 24,
+    "download_timeout_seconds": 30,
+    "confirmation_required": false,
+    "allowed_paths": [
+      "~/Pictures/",
+      "~/Downloads/",
+      "data/"
+    ]
   }
 }

@@ -1,8 +1,8 @@
-# Cardinal v1.2.0 — Installation Guide
+# Cardinal v1.3.0 — Installation Guide
 
 **Linux only. Offline builds. Ubuntu 24.04 LTS recommended.**
 
-Cardinal v1.2.0 has removed Windows support. For development and deployment, use Ubuntu 24.04 LTS (or newer LTS). The build is fully offline once dependencies are vendored.
+Cardinal v1.3.0 adds native vision encoding (moondream2 via llama.cpp's `mtmd` subsystem). The build remains fully offline once dependencies are vendored.
 
 ---
 
@@ -17,6 +17,7 @@ Cardinal v1.2.0 has removed Windows support. For development and deployment, use
   - [Download Models](#download-models)
   - [Build Cardinal](#build-cardinal)
 - [First Run](#first-run)
+- [Verify Vision (v1.3.0)](#verify-vision-v130)
 - [Verify the HTTP API](#verify-the-http-api)
 - [Python Sandbox Setup (Optional)](#python-sandbox-setup-optional)
 - [Troubleshooting](#troubleshooting)
@@ -32,11 +33,11 @@ Cardinal v1.2.0 has removed Windows support. For development and deployment, use
 | OS | Ubuntu 22.04 LTS | **Ubuntu 24.04 LTS** |
 | CPU | Any x64, 4 cores | AMD Ryzen 7 or better |
 | RAM | 8GB | 16GB |
-| GPU | NVIDIA with 4GB VRAM | RTX 3050 or better |
-| Storage | 20GB free | 50GB free |
+| GPU | NVIDIA with 4GB VRAM | RTX 3050 or better (vision adds ~1.5GB) |
+| Storage | 25GB free | 50GB free |
 | CUDA Compute | 7.5+ | 8.6 (RTX 30 series) |
 
-Cardinal does not run on AMD or Intel GPUs. NVIDIA CUDA is required.
+Cardinal does **not** run on AMD or Intel GPUs. NVIDIA CUDA is required.
 
 **Windows is no longer supported as of v1.1.0.**
 
@@ -49,7 +50,7 @@ For the impatient:
 ```bash
 # Install system dependencies
 sudo apt update
-sudo apt install -y build-essential cmake libsqlite3-dev libssl-dev swi-prolog
+sudo apt install -y build-essential cmake libsqlite3-dev libssl-dev swi-prolog python3
 
 # Clone Cardinal
 git clone https://github.com/satwiksinghchauhan/cardinal ~/cardinal
@@ -83,7 +84,8 @@ sudo apt install -y \
     pkg-config \
     libssl-dev \
     libsqlite3-dev \
-    swi-prolog
+    swi-prolog \
+    python3
 ```
 
 Verify:
@@ -147,10 +149,10 @@ Cardinal uses a **clean vendor folder** for offline builds. You populate `vendor
 
 | Dependency | Upstream URL | Clone as |
 | :--- | :--- | :--- |
-| llama.cpp | https://github.com/ggerganov/llama.cpp | vendor/llama.cpp |
-| nlohmann/json | https://github.com/nlohmann/json | vendor/nlohmann_json |
-| cpp-httplib | https://github.com/yhirose/cpp-httplib | vendor/cpp-httplib |
-| tokenizers-cpp | https://github.com/mlc-ai/tokenizers-cpp | vendor/tokenizers-cpp |
+| llama.cpp | https://github.com/ggerganov/llama.cpp | `vendor/llama.cpp` |
+| nlohmann/json | https://github.com/nlohmann/json | `vendor/nlohmann_json` |
+| cpp-httplib | https://github.com/yhirose/cpp-httplib | `vendor/cpp-httplib` |
+| tokenizers-cpp | https://github.com/mlc-ai/tokenizers-cpp | `vendor/tokenizers-cpp` |
 
 **Clone them manually:**
 
@@ -177,40 +179,66 @@ chmod +x scripts/populate_vendor.sh
 
 ### Step 4 — Download Models
 
-Cardinal requires a primary GGUF model. The neural verifier is optional.
+Cardinal requires a primary GGUF model and the vision encoder models.
 
-**Primary model (required):**
-- Qwen3.5 4B Q4_K_M
-- Download from: https://huggingface.co/bartowski/Qwen_Qwen3.5-4B-GGUF
+#### Primary LLM (required)
+
+- **Qwen3.5 4B Q4_K_M**
+- Download from: [bartowski/Qwen_Qwen3.5-4B-GGUF](https://huggingface.co/bartowski/Qwen_Qwen3.5-4B-GGUF)
 - File: `Qwen_Qwen3.5-4B-Q4_K_M.gguf` (~2.5GB)
 - Place at: `~/cardinal/models/Qwen_Qwen3.5-4B-Q4_K_M.gguf`
 
-**Neural verifier model (optional):**
-- Llama 3.2 1B Instruct Q4_K_M
-- Download from: https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF
-- File: `Llama-3.2-1B-Instruct-Q4_K_M.gguf` (~700MB)
+#### Vision encoder (v1.3.0, optional but recommended)
+
+```bash
+mkdir -p ~/cardinal/models/vision
+cd ~/cardinal/models/vision
+
+# Text model (~1.1GB)
+wget https://huggingface.co/vikhyatk/moondream2/resolve/main/moondream2-text-model-f16.gguf
+
+# Vision projector (~400MB)
+wget https://huggingface.co/vikhyatk/moondream2/resolve/main/moondream2-mmproj-f16.gguf
+```
+If those links dont work you can manually install from https://huggingface.co/salivosa/moondream2-gguf, just make sure to change the model path in config.json
+
+If you skip the vision models, set `vision.enabled = false` in `config.json`.
+
+#### Neural verifier (optional)
+
+- Llama 3.2 1B Instruct Q4_K_M (~700MB)
+- Download from: [bartowski/Llama-3.2-1B-Instruct-GGUF](https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF)
 - Place at: `~/cardinal/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf`
 
-If you skip the neural verifier, set `verifier.mode` to `"symbolic"` in `config.json` and leave `neural_model_path` empty.
+If you skip the neural verifier, set `verifier.mode = "symbolic"` in `config.json`.
 
 ---
 
-### Step 5 — Build llama.cpp with CUDA
+### Step 5 — Build llama.cpp with CUDA and mtmd
+
+**Important:** v1.3.0 uses the new `mtmd` (multimodal) subsystem, not the old `llava` example.  
+Enable `LLAMA_BUILD_EXAMPLES` (which includes `mtmd`) and ensure CUDA is on.
 
 ```bash
 cd ~/cardinal/vendor/llama.cpp
-git checkout b8660
-cmake -B build -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j$(nproc)
+git checkout b8660   # or whatever commit works for you
+mkdir -p build && cd build
+cmake .. \
+    -DGGML_CUDA=ON \
+    -DLLAMA_BUILD_EXAMPLES=ON \
+    -DCMAKE_BUILD_TYPE=Release
+make -j$(nproc)
 ```
 
-This will take 10-20 minutes.
+**What this builds:**
+- `libllama.so`, `libggml.so`, `libggml-cuda.so`
+- `libmtmd.so` (multimodal wrapper, required for vision)
+- `llama-mtmd-cli` (test utility, optional)
 
 Verify:
 ```bash
 ls build/bin/
-# Should show: libllama.so, libggml.so, libggml-cuda.so (or similar)
-# Exact names vary by llama.cpp version — .a static libs are also acceptable
+# Should contain: libllama.so, libggml.so, libmtmd.so, ...
 ```
 
 ---
@@ -224,47 +252,28 @@ cmake .. -DCMAKE_BUILD_TYPE=Release
 make -j$(nproc)
 ```
 
-### Optional: Build with TensorRT Backend
+**CMake will automatically detect `mtmd`** from `vendor/llama.cpp/tools/mtmd`.  
+If you see:
 
-Cardinal v1.2.0 supports NVIDIA TensorRT for optimized inference on supported GPUs.
+```
+-- mtmd: found at .../vendor/llama.cpp/tools/mtmd — vision will be enabled
+```
 
-**Prerequisites:**
-- NVIDIA TensorRT installed (typically `/usr/lib/x86_64-linux-gnu/` or `/opt/TensorRT-xxx/`)
-- TRT-LLM (TensorRT LLM) for LLM inference
+then vision is enabled. If not, check that `llama.cpp` was built with `-DLLAMA_BUILD_EXAMPLES=ON`.
 
-**Build with TensorRT:**
+#### Optional: Build with TensorRT Backend
 
 ```bash
-cd ~/cardinal
-mkdir -p build && cd build
-
 cmake .. -DCMAKE_BUILD_TYPE=Release \
     -DCARDINAL_ENABLE_TENSORRT=ON \
     -DTRT_LLM_INCLUDE_DIR=/path/to/TensorRT-LLM/include \
     -DTRT_LLM_LIB_DIR=/path/to/TensorRT-LLM/lib
-
 make -j$(nproc)
 ```
-
-**Note:** If `TRT_LLM_INCLUDE_DIR` and `TRT_LLM_LIB_DIR` are not specified, CMake will attempt to find TensorRT in standard system paths.
 
 **Switching back to llama.cpp:** Omit the `-DCARDINAL_ENABLE_TENSORRT=ON` flag.
 
 A successful build produces `cardinal` in `~/cardinal/build/bin/`.
-
-**If CMake cannot find SWI-Prolog headers:**
-
-```bash
-swipl --dump-runtime-variables | grep PLBASE
-# Example output: PLBASE='/usr/lib/swi-prolog'
-```
-
-Then pass the include path explicitly:
-
-```bash
-cmake .. -DCMAKE_BUILD_TYPE=Release \
-  -DSWIPL_INCLUDE_DIR=/usr/lib/swi-prolog/include
-```
 
 ---
 
@@ -277,11 +286,33 @@ cd ~/cardinal
 ./build/bin/cardinal
 ```
 
-You should see:
+If vision models are correctly configured and `mtmd` was found, you will see:
+
+```
+[INFO ] VisionCache: initialized at data/vision_cache (TTL=24h)
+[INFO ] VisionEncoder: loading text model: models/vision/moondream2-text-model-f16.gguf
+[INFO ] VisionEncoder: loading mmproj:     models/vision/moondream2-mmproj-f16.gguf
+[INFO ] VisionEncoder: ready (CPU, 4 threads)
+[INFO ] Vision encoder ready (moondream2, CPU)
+```
+
+If vision models are missing, you will see:
+
+```
+[WARN ] VisionEncoder: built without mtmd support — vision disabled
+[WARN ]   Add vendor/llama.cpp/tools/mtmd to include path in CMakeLists
+```
+
+In that case, check that:
+- `llama.cpp` was built with `-DLLAMA_BUILD_EXAMPLES=ON`
+- The headers in `vendor/llama.cpp/tools/mtmd/` exist
+- The models are present at the paths specified in `config.json`
+
+Then you should see the Cardinal prompt:
 
 ```
   +===========================================+
-  |         C A R D I N A L  v1.2.0           |
+  |         C A R D I N A L  v1.3.0           |
   |    Neurosymbolic AGI Architecture         |
   +===========================================+
 
@@ -305,6 +336,24 @@ You:
 
 ---
 
+## Verify Vision (v1.3.0)
+
+Place a test image (e.g., `test.jpg`) in `data/` and ask:
+
+```
+You: describe the image at data/test.jpg
+```
+
+Cardinal will call the `analyze_image` tool and return a description.
+
+Example output:
+
+```
+Cardinal: The image shows a portrait of a young man with glasses and a nose ring. He looks directly at the camera with a friendly and approachable demeanor.
+```
+
+---
+
 ## Verify the HTTP API
 
 Open a new terminal while Cardinal is running:
@@ -313,211 +362,70 @@ Open a new terminal while Cardinal is running:
 # Health check — no auth required
 curl http://127.0.0.1:8080/api/health
 
-# Chat
+# Chat with vision
 curl -X POST http://127.0.0.1:8080/api/chat \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer cardinal-dev-key-change-in-production" \
-  -d '{"session_id":"test","message":"What is entropy?"}'
+  -d '{"session_id":"test","message":"describe the image at data/test.jpg"}'
 
-# Agentic request (with tools)
+# Agentic request (with vision tool)
 curl -X POST http://127.0.0.1:8080/api/chat \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer cardinal-dev-key-change-in-production" \
   -d '{
     "session_id": "agent-session",
-    "message": "Search the web for DRDO latest news and save to ~/Downloads/drdo_news.txt",
+    "message": "what is in https://example.com/image.jpg",
     "max_iterations": 5
   }'
 ```
 
 ---
 
-## Python Sandbox Setup (Optional)
-
-If you intend to use the `run_python` tool (v1.2.0), you have two sandbox options.
-
-### Subprocess Mode (Default)
-
-No additional setup required. Ensure `python3` is installed:
-
-```bash
-sudo apt install python3
-```
-
-### Docker Mode (Production / DRDO)
-
-For full isolation in production deployments:
-
-```bash
-# Install Docker
-sudo apt install docker.io
-sudo systemctl enable --now docker
-
-# Add your user to the docker group
-sudo usermod -aG docker $USER
-newgrp docker
-
-# Verify
-docker run hello-world
-```
-
-Then set in `config.json`:
-
-```json
-"tools": {
-  "run_python": {
-    "enabled": true,
-    "sandbox_mode": "docker",
-    "docker_image": "python:3.12-slim"
-  }
-}
-```
-
----
-
 ## Troubleshooting
 
-### `libllama.so not found` at runtime
+### `mtmd.h not found` during CMake
 
-The RPATH is set in CMakeLists, but sometimes the loader still can't find the library:
+Ensure `llama.cpp` was built with `-DLLAMA_BUILD_EXAMPLES=ON`.  
+If you already built it, you can still add the include path manually:
 
 ```bash
-export LD_LIBRARY_PATH=~/cardinal/vendor/llama.cpp/build/lib:$LD_LIBRARY_PATH
+cd ~/cardinal/build
+cmake .. -DCMAKE_CXX_FLAGS="-I/path/to/llama.cpp/tools/mtmd"
+```
+
+But this should not be necessary if the CMake detection works.
+
+### `libmtmd.so not found` at runtime
+
+```bash
+export LD_LIBRARY_PATH=~/cardinal/vendor/llama.cpp/build/bin:$LD_LIBRARY_PATH
 ./build/bin/cardinal
 ```
 
-To make it permanent:
+Make it permanent:
 
 ```bash
-echo 'export LD_LIBRARY_PATH=~/cardinal/vendor/llama.cpp/build/lib:$LD_LIBRARY_PATH' >> ~/.bashrc
+echo 'export LD_LIBRARY_PATH=~/cardinal/vendor/llama.cpp/build/bin:$LD_LIBRARY_PATH' >> ~/.bashrc
 source ~/.bashrc
 ```
 
----
+### Vision encoder says "built without mtmd support"
 
-### `SWI-Prolog not found` during CMake
-
-Find where SWI-Prolog installed its headers:
-
-```bash
-find /usr -name "SWI-Prolog.h" 2>/dev/null
-```
-
-Pass the path explicitly:
-
-```bash
-cmake .. -DSWIPL_INCLUDE_DIR=/usr/lib/swi-prolog/include
-```
-
----
-
-### `CUDA not found` during CMake
-
-Make sure CUDA is on your PATH:
-
-```bash
-export PATH=/usr/local/cuda/bin:$PATH
-export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
-```
-
-Then re-run CMake.
-
----
-
-### `Permission denied` when running cardinal
-
-```bash
-chmod +x ~/cardinal/build/bin/cardinal
-```
-
----
+- Check that `CARDINAL_MTMD_AVAILABLE` is defined in the build summary.
+- Re‑run CMake and ensure the detection block prints `mtmd: found at ...`
+- If not, manually set `-DCARDINAL_MTMD_AVAILABLE=ON` during CMake.
 
 ### `CUDA out of memory` on startup
 
-Reduce `gpu_layers` in `config.json`:
+Reduce `gpu_layers` in `config.json`. Vision encoding runs on CPU; you only need VRAM for the primary LLM.
 
-```json
-"gpu_layers": 20
-```
+### Vision models not loading
 
-The remaining layers run on CPU. Performance decreases but Cardinal works.
+- Verify the paths in `config.json` point to existing files.
+- Ensure the files are not corrupted (re‑download if necessary).
+- The text model should be ~1.1GB, the mmproj ~400MB.
 
----
-
-### Agentic loop crashes with `max_iterations` (v1.2.0)
-
-Lower the `max_iterations` value in `config.json`:
-
-```json
-"agent": {
-  "max_iterations": 5,
-  "max_iterations_hard_cap": 20
-}
-```
-
-Or, if using the API request, lower the `max_iterations` parameter in the JSON body.
-
----
-
-### HTTP server not responding
-
-Check the port is not in use:
-
-```bash
-ss -tlnp | grep 8080
-```
-
-If the port is taken, change it in `config.json`:
-
-```json
-"port": 8181
-```
-
----
-
-### Cardinal starts but immediately exits
-
-Check the log file:
-
-```bash
-cat ~/cardinal/logs/cardinal.log
-```
-
-Common causes:
-- Missing model file
-- Wrong grammar path in `config.json`
-- SQLite permission error on `data/memory/` directory
-- Explainability keys missing (first run with `auto_generate_keys: true` fixes this)
-
----
-
-### `n_ubatch` error in llama.cpp build
-
-Check the log file:
-
-```bash
-cat ~/cardinal/logs/cardinal.log
-```
-
-Common cause:
-- Lower or higher n_ubatch than what the gpu can handle
-
-Fix:
-In `src/core/backends/llama_cpp_backend.cpp`, in `create_context()`, change `ctx_params.n_ubatch` in
-
-```cpp
-ctx_params.n_ctx           = config_.backend.llama_cpp.context_length;
-ctx_params.n_batch         = config_.backend.llama_cpp.context_length;
-ctx_params.n_ubatch        = 512;
-ctx_params.n_threads       = config_.backend.llama_cpp.threads;
-ctx_params.n_threads_batch = config_.backend.llama_cpp.threads;
-```
-
----
-
-### Docker sandbox permission denied
-
-Ensure your user is in the `docker` group:
+### Docker sandbox permission denied (run_python tool)
 
 ```bash
 sudo usermod -aG docker $USER
@@ -549,7 +457,7 @@ To disable auth entirely for local development:
 
 ---
 
-## Directory Reference
+## Directory Reference (v1.3.0)
 
 ```
 ~/cardinal/
@@ -563,28 +471,34 @@ To disable auth entirely for local development:
             episodes.db
             agent_working_memory   (SQLite, created at runtime)
         explainability/
-            audit.db               (SQLite audit log)
-            cardinal_private.pem   (Ed25519 private key, auto‑generated)
-            cardinal_public.pem    (Ed25519 public key)
-            exports/               (JSON export files)
-        training_export.jsonl      (generated on first export)
+            audit.db
+            cardinal_private.pem
+            cardinal_public.pem
+            exports/
+        vision_cache/              ← (new in v1.3.0) cached downloaded images
     logs/
         cardinal.log
         episodic.log
     models/
         Qwen_Qwen3.5-4B-Q4_K_M.gguf
-        Llama-3.2-1B-Instruct-Q4_K_M.gguf
-    scripts/
-        populate_vendor.sh         (optional)
+        Llama-3.2-1B-Instruct-Q4_K_M.gguf   (optional)
+        vision/
+            moondream2-text-model-f16.gguf  ← (v1.3.0)
+            moondream2-mmproj-f16.gguf      ← (v1.3.0)
     src/
-        ...
+        vision/                    ← (v1.3.0)
+            vision_types.h
+            vision_encoder.h/.cpp
+            vision_cache.h/.cpp
+        tools/builtin/
+            analyze_image.h/.cpp   ← (v1.3.0)
+        ... (rest of source)
     vendor/
         llama.cpp/
             build/
-                lib/
-                    libllama.so
-                    libggml.so
-                    libggml-cuda.so
+                bin/
+                    libmtmd.so     ← (required for vision)
+                    ...
         nlohmann_json/
         cpp-httplib/
         tokenizers-cpp/
@@ -599,15 +513,13 @@ To disable auth entirely for local development:
 
 ## Next Steps
 
-Once Cardinal is running:
+Once Cardinal is running with vision:
 
-- Read `README.md` for a full architecture overview
-- Read `DOCUMENTATION.md` for the complete API, agentic pipeline, and explainability system
-- Use `/stats` to see memory and verifier state
-- Use `/rules` to watch the rule base grow over time
-- Query past episodes: `GET /api/episodes?keyword=your+query`
-- Export training data: `/export` or `POST /api/export`
-- Export explainability trace: `POST /api/explainability/export`
+- Read `README.md` for the full architecture overview.
+- Read `DOCUMENTATION.md` for the complete API, agentic pipeline, explainability system, and vision subsystem internals.
+- Use `/stats` to see memory and verifier state.
+- Export training data: `/export` or `POST /api/export`.
+- Export signed explainability traces: `POST /api/explainability/export`.
 
 ---
 

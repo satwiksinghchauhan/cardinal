@@ -97,6 +97,7 @@ namespace cardinal {
         void register_builtin_file_write();
         void register_builtin_kg_query();
         void register_builtin_episodic_search();
+        void register_builtin_analyze_image();
 
         // Format a single tool as JSON Schema
         std::string format_tool(const ToolDefinition& def) const;

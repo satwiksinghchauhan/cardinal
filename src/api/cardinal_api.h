@@ -38,6 +38,8 @@ namespace cardinal {
     class ConsistencyChecker;
     class TrainingExporter;
     class ToolRegistry;
+    class VisionEncoder;
+    class VisionCache;
     class ToolExecutor;
     class AuditLog;
     class ExplainabilityExporter;
@@ -178,9 +180,13 @@ namespace cardinal {
         std::unique_ptr<NeuralVerifier>        neural_verifier_;
         std::unique_ptr<ConsistencyChecker>    checker_;
 
-        // Tools (new)
+        // Tools
         std::unique_ptr<ToolRegistry>          tool_registry_;
         std::unique_ptr<ToolExecutor>          tool_executor_;
+
+        // Vision (new in v1.3.0)
+        std::unique_ptr<VisionEncoder>         vision_encoder_;
+        std::unique_ptr<VisionCache>           vision_cache_;
 
         // Explainability (new)
         std::unique_ptr<AuditLog>              audit_log_;

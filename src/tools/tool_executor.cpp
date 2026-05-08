@@ -6,6 +6,9 @@
 // =============================================================================
 
 #include "tools/tool_executor.h"
+#include "tools/builtin/analyze_image.h"
+#include "vision/vision_encoder.h"
+#include "vision/vision_cache.h"
 #include "memory/knowledge_graph.h"
 #include "memory/episodic_retriever.h"
 #include "utils/logger.h"
@@ -205,6 +208,13 @@ namespace cardinal {
         if (name == "file_write")            return execute_file_write(call);
         if (name == "knowledge_graph_query") return execute_kg_query(call);
         if (name == "episodic_search")       return execute_episodic_search(call);
+        if (name == "analyze_image") {
+            if (!vision_encoder_ || !vision_cache_)
+                return make_error(call, ToolStatus::FAILURE,
+                    "analyze_image: vision subsystem not initialized");
+            return execute_analyze_image(call, config_,
+                                         *vision_encoder_, *vision_cache_);
+        }
 
         return make_error(call, ToolStatus::NOT_FOUND,
                           "No executor for tool: " + name);

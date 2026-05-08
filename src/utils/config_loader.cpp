@@ -88,6 +88,7 @@ namespace cardinal {
             config.retriever      = parse_retriever(j.at("retriever"));
             config.api            = parse_api(j.at("api"));
             config.tools          = parse_tools(j.at("tools"));
+            config.vision         = parse_vision(j.value("vision", json::object()));
             config.agent          = parse_agent(j.value("agent", json::object()));
             config.explainability = parse_explainability(
                 j.value("explainability", json::object()));
@@ -246,6 +247,7 @@ namespace cardinal {
 
     ToolsConfig ConfigLoader::parse_tools(const auto& j) {
         ToolsConfig c;
+        c.home_access = opt<bool>(j, "home_access", false);
 
         // web_search
         if (j.contains("web_search") && j["web_search"].is_object()) {
@@ -317,16 +319,33 @@ namespace cardinal {
             c.episodic_search.confirmation_required = opt<bool>(es, "confirmation_required", false);
             c.episodic_search.max_results           = opt<int>(es, "max_results", 5);
         }
-        c.home_access = opt<bool>(j, "home_access", false);
 
         return c;
     }
 
     // =========================================================================
-    // parse_agent (new)
+    // parse_vision (new in v1.3.0)
     // =========================================================================
 
-    AgentConfig ConfigLoader::parse_agent(const auto& j) {
+    VisionConfig ConfigLoader::parse_vision(const auto& j) {
+        VisionConfig c;
+        c.model_path                  = opt<std::string>(j, "model_path", "");
+        c.mmproj_path                 = opt<std::string>(j, "mmproj_path", "");
+        c.gpu_layers                  = opt<int>(j, "gpu_layers", 0);
+        c.threads                     = opt<int>(j, "threads", 4);
+        c.max_tokens                  = opt<int>(j, "max_tokens", 512);
+        c.cache_path                  = opt<std::string>(j, "cache_path",
+                                            "data/vision_cache");
+        c.cache_ttl_hours             = opt<int>(j, "cache_ttl_hours", 24);
+        c.download_timeout_seconds    = opt<int>(j, "download_timeout_seconds", 30);
+        c.confirmation_required       = opt<bool>(j, "confirmation_required", false);
+        c.allowed_paths               = opt_string_array(j, "allowed_paths");
+        return c;
+    }
+
+    // =========================================================================
+    // parse_agent
+AgentConfig ConfigLoader::parse_agent(const auto& j) {
         AgentConfig c;
         c.enabled                      = opt<bool>(j, "enabled", true);
         c.max_iterations               = opt<int>(j, "max_iterations", 10);
@@ -550,6 +569,19 @@ namespace cardinal {
         j["explainability"]["auto_generate_keys"]       = e.auto_generate_keys;
         j["explainability"]["export_path"]              = e.export_path;
         j["explainability"]["attach_trace_to_response"] = e.attach_trace_to_response;
+
+        // Vision
+        const auto& v = config.vision;
+        j["vision"]["model_path"]               = v.model_path;
+        j["vision"]["mmproj_path"]              = v.mmproj_path;
+        j["vision"]["gpu_layers"]               = v.gpu_layers;
+        j["vision"]["threads"]                  = v.threads;
+        j["vision"]["max_tokens"]               = v.max_tokens;
+        j["vision"]["cache_path"]               = v.cache_path;
+        j["vision"]["cache_ttl_hours"]          = v.cache_ttl_hours;
+        j["vision"]["download_timeout_seconds"] = v.download_timeout_seconds;
+        j["vision"]["confirmation_required"]    = v.confirmation_required;
+        j["vision"]["allowed_paths"]            = v.allowed_paths;
 
         j["logging"]["level"] = config.logging.level;
         j["logging"]["path"]  = config.logging.path;

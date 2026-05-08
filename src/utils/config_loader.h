@@ -106,6 +106,7 @@ namespace cardinal {
     // ToolsConfig (replaces original flat ToolsConfig)
     // -------------------------------------------------------------------------
     struct ToolsConfig {
+        bool home_access = false;
         WebSearchToolConfig      web_search;
         WebFetchToolConfig       web_fetch;
         CalculatorToolConfig     calculator;
@@ -114,7 +115,22 @@ namespace cardinal {
         FileWriteToolConfig      file_write;
         KnowledgeGraphToolConfig knowledge_graph;
         EpisodicSearchToolConfig episodic_search;
-        bool                     home_access = false;
+    };
+
+    // -------------------------------------------------------------------------
+    // VisionConfig (new in v1.3.0)
+    // -------------------------------------------------------------------------
+    struct VisionConfig {
+        std::string              model_path;       // path to moondream2 GGUF
+        std::string              mmproj_path;      // path to mmproj GGUF
+        int                      gpu_layers      = 0;    // 0 = CPU only
+        int                      threads         = 4;
+        int                      max_tokens      = 512;
+        std::string              cache_path      = "data/vision_cache";
+        int                      cache_ttl_hours = 24;   // 0 = keep forever
+        int                      download_timeout_seconds = 30;
+        bool                     confirmation_required    = false;
+        std::vector<std::string> allowed_paths;   // for file:// inputs
     };
 
     // -------------------------------------------------------------------------
@@ -237,8 +253,9 @@ namespace cardinal {
         RetrieverConfig       retriever;
         ApiConfig             api;
         ToolsConfig           tools;           // expanded per-tool configs
-        AgentConfig           agent;           // new
-        ExplainabilityConfig  explainability;  // new
+        AgentConfig           agent;
+        ExplainabilityConfig  explainability;
+        VisionConfig          vision;          // new in v1.3.0
         BenchmarkConfig       benchmark;
         LoggingConfig         logging;
     };
@@ -265,7 +282,8 @@ namespace cardinal {
         static RetrieverConfig        parse_retriever(const auto& j);
         static ApiConfig              parse_api(const auto& j);
         static ToolsConfig            parse_tools(const auto& j);       // expanded
-        static AgentConfig            parse_agent(const auto& j);       // new
+        static VisionConfig           parse_vision(const auto& j);      // new in v1.3.0
+        static AgentConfig            parse_agent(const auto& j);
         static ExplainabilityConfig   parse_explainability(const auto& j); // new
         static BenchmarkConfig        parse_benchmark(const auto& j);
         static LoggingConfig          parse_logging(const auto& j);

@@ -36,6 +36,8 @@ namespace cardinal {
         if (tc.file_write.enabled)         register_builtin_file_write();
         if (tc.knowledge_graph.enabled)    register_builtin_kg_query();
         if (tc.episodic_search.enabled)    register_builtin_episodic_search();
+        // Vision tool — only register if model is configured
+        if (!config_.vision.model_path.empty()) register_builtin_analyze_image();
 
         LOG_INFO("ToolRegistry: " + std::to_string(tools_.size()) +
                  " tools registered");
@@ -375,6 +377,30 @@ namespace cardinal {
             "min_confidence", ToolParameterType::NUMBER,
             "Minimum confidence score filter (0.0-1.0)",
             false, "0.0"
+        });
+
+        register_tool(def);
+    }
+
+    void ToolRegistry::register_builtin_analyze_image() {
+        ToolDefinition def;
+        def.name        = "analyze_image";
+        def.description = "Analyze an image and return a detailed text description. "
+                          "Accepts a local file path or a URL. "
+                          "Optionally accepts a specific question or prompt about the image.";
+        def.confirmation_required = config_.vision.confirmation_required;
+
+        def.parameters.push_back({
+            "image", ToolParameterType::STRING,
+            "The image to analyze. Can be a local file path (e.g. ~/Pictures/photo.jpg) "
+            "or a URL (e.g. https://example.com/image.png)",
+            true, "", {}
+        });
+        def.parameters.push_back({
+            "prompt", ToolParameterType::STRING,
+            "Optional specific question or instruction about the image. "
+            "Default: comprehensive description of all visible content.",
+            false, "", {}
         });
 
         register_tool(def);

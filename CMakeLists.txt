@@ -1,23 +1,14 @@
 # =============================================================================
-# Cardinal - Root CMakeLists.txt (v1.2.0)
+# Cardinal - Root CMakeLists.txt (v1.3.0)
 # Neurosymbolic AGI Architecture
 # =============================================================================
-# Offline-first: uses vendored sources if present, falls back to FetchContent
-# 
-# For offline builds (default, recommended):
-#   - Populate vendor/ with required repos (see README.md)
-#   - cmake -B build -DCMAKE_BUILD_TYPE=Release
-#   - cmake --build build -j$(nproc)
-#
-# For online builds (if vendor/ missing, or -DFORCE_FETCH=ON):
-#   - cmake -B build -DCMAKE_BUILD_TYPE=Release -DFORCE_FETCH=ON
-#   - cmake --build build -j$(nproc)
+# Offline-first: uses vendored repos when present, falls back to FetchContent.
 # =============================================================================
 
 cmake_minimum_required(VERSION 3.28)
 
 project(Cardinal
-    VERSION 1.2.0
+    VERSION 1.3.0
     DESCRIPTION "Neurosymbolic AGI Architecture"
     LANGUAGES CXX CUDA
 )
@@ -42,14 +33,9 @@ option(CARDINAL_ENABLE_TENSORRT
     "Build TensorRT-LLM backend"
     OFF)
 
-option(FORCE_FETCH
-    "Force FetchContent even if vendored sources exist"
-    OFF)
-
 message(STATUS "Build type:         ${CMAKE_BUILD_TYPE}")
 message(STATUS "CUDA architectures: ${CMAKE_CUDA_ARCHITECTURES}")
 message(STATUS "TensorRT backend:   ${CARDINAL_ENABLE_TENSORRT}")
-message(STATUS "Force fetch:        ${FORCE_FETCH}")
 message(STATUS "Version:            ${PROJECT_VERSION}")
 
 # -----------------------------------------------------------------------------
@@ -69,93 +55,81 @@ add_compile_options(
 )
 
 # -----------------------------------------------------------------------------
-# Helper macro: use vendored or fetch
-# -----------------------------------------------------------------------------
-macro(add_vendored_or_fetched name vendor_path git_url git_tag)
-    if(NOT FORCE_FETCH AND EXISTS "${CMAKE_SOURCE_DIR}/${vendor_path}/CMakeLists.txt")
-        message(STATUS "${name}: using vendored source from ${vendor_path}")
-        add_subdirectory(${vendor_path} ${CMAKE_BINARY_DIR}/${name})
-    else()
-        message(STATUS "${name}: vendored source not found, fetching from ${git_url}")
-        FetchContent_Declare(${name}
-            GIT_REPOSITORY ${git_url}
-            GIT_TAG        ${git_tag}
-            GIT_SHALLOW    TRUE)
-        FetchContent_MakeAvailable(${name})
-    endif()
-endmacro()
-
-# -----------------------------------------------------------------------------
-# FetchContent (only used as fallback)
+# FetchContent (offline first)
 # -----------------------------------------------------------------------------
 include(FetchContent)
 set(FETCHCONTENT_QUIET OFF)
 
+# Helper macro: only fetch if the source directory does NOT already exist
+macro(fetch_if_missing name repo tag)
+    if(NOT EXISTS "${CMAKE_SOURCE_DIR}/vendor/${name}")
+        message(STATUS "Fetching ${name} (missing from vendor/${name})")
+        FetchContent_Declare(${name}
+            GIT_REPOSITORY ${repo}
+            GIT_TAG        ${tag}
+            GIT_SHALLOW    TRUE)
+        FetchContent_MakeAvailable(${name})
+    else()
+        message(STATUS "Using vendored ${name} (vendor/${name})")
+        # Make the target available (if it's a CMake project) or just set variables.
+        # For nlohmann/json, cpp-httplib, muparser, tokenizers-cpp we can still
+        # add their include paths manually. Here we just ensure the directory is known.
+        if(EXISTS "${CMAKE_SOURCE_DIR}/vendor/${name}/CMakeLists.txt")
+            add_subdirectory("${CMAKE_SOURCE_DIR}/vendor/${name}" "${CMAKE_CURRENT_BINARY_DIR}/vendor-${name}")
+        else()
+            # For plain header-only libs or special cases, we just note the path.
+            message(STATUS "Vendored ${name} exists but no CMakeLists.txt -- include paths must be set manually")
+        endif()
+    endif()
+endmacro()
+
 # nlohmann/json
-add_vendored_or_fetched(nlohmann_json
-    "vendor/nlohmann_json"
-    "https://github.com/nlohmann/json.git"
-    "v3.11.3")
+fetch_if_missing(nlohmann_json
+    https://github.com/nlohmann/json.git
+    v3.11.3)
 
 # cpp-httplib
-add_vendored_or_fetched(httplib
-    "vendor/cpp-httplib"
-    "https://github.com/yhirose/cpp-httplib.git"
-    "v0.18.3")
+fetch_if_missing(cpp-httplib
+    https://github.com/yhirose/cpp-httplib.git
+    v0.18.3)
 
-# muparser (vendored fallback)
-if(NOT FORCE_FETCH AND EXISTS "${CMAKE_SOURCE_DIR}/vendor/muparser/CMakeLists.txt")
-    message(STATUS "muparser: using vendored source from vendor/muparser")
-    set(ENABLE_SAMPLES OFF CACHE BOOL "" FORCE)
-    set(ENABLE_OPENMP  OFF CACHE BOOL "" FORCE)
-    add_subdirectory(vendor/muparser ${CMAKE_BINARY_DIR}/muparser)
-else()
-    message(STATUS "muparser: vendored not found, fetching")
-    FetchContent_Declare(muparser
-        GIT_REPOSITORY https://github.com/beltoforion/muparser.git
-        GIT_TAG        v2.3.4
-        GIT_SHALLOW    TRUE)
-    set(ENABLE_SAMPLES OFF CACHE BOOL "" FORCE)
-    set(ENABLE_OPENMP  OFF CACHE BOOL "" FORCE)
-    FetchContent_MakeAvailable(muparser)
-endif()
+# muparser
+fetch_if_missing(muparser
+    https://github.com/beltoforion/muparser.git
+    v2.3.4)
+set(ENABLE_SAMPLES OFF CACHE BOOL "" FORCE)
+set(ENABLE_OPENMP  OFF CACHE BOOL "" FORCE)
 
-# tokenizers-cpp (TRT backend only)
-set(TOKENIZERS_CPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+# tokenizers-cpp (only if TensorRT is enabled)
 if(CARDINAL_ENABLE_TENSORRT)
-    add_vendored_or_fetched(tokenizers_cpp
-        "vendor/tokenizers-cpp"
-        "https://github.com/mlc-ai/tokenizers-cpp.git"
-        "main")
+    fetch_if_missing(tokenizers_cpp
+        https://github.com/mlc-ai/tokenizers-cpp.git
+        main)
+    set(TOKENIZERS_CPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 endif()
 
 # -----------------------------------------------------------------------------
-# System dependencies
+# System dependencies (no changes needed here)
 # -----------------------------------------------------------------------------
-
-# OpenSSL
 find_package(OpenSSL REQUIRED)
 message(STATUS "OpenSSL: ${OPENSSL_VERSION}")
 add_compile_definitions(CPPHTTPLIB_OPENSSL_SUPPORT)
 
-# SQLite3
 find_package(PkgConfig QUIET)
 if(PkgConfig_FOUND)
     pkg_check_modules(SQLITE3 REQUIRED sqlite3)
     message(STATUS "SQLite3: ${SQLITE3_VERSION}")
     set(SQLITE3_SYSTEM ON)
 else()
-    find_library(SQLITE3_LIB  NAMES sqlite3 REQUIRED)
-    find_path(SQLITE3_INCLUDE  NAMES sqlite3.h REQUIRED)
+    find_library(SQLITE3_LIB NAMES sqlite3 REQUIRED)
+    find_path(SQLITE3_INCLUDE NAMES sqlite3.h REQUIRED)
     set(SQLITE3_MANUAL ON)
 endif()
 
-# llama.cpp (vendored only — no fetch fallback)
+# llama.cpp (vendored, always present)
 set(LLAMA_ROOT  ${CMAKE_SOURCE_DIR}/vendor/llama.cpp)
-if(NOT EXISTS "${LLAMA_ROOT}/CMakeLists.txt")
-    message(FATAL_ERROR
-        "llama.cpp not found at ${LLAMA_ROOT}\n"
-        "Please clone it: git clone https://github.com/ggerganov/llama.cpp.git ${LLAMA_ROOT}")
+if(NOT EXISTS "${LLAMA_ROOT}")
+    message(FATAL_ERROR "llama.cpp not found at ${LLAMA_ROOT} - please run 'git submodule update --init' or copy it there")
 endif()
 
 set(LLAMA_BUILD ${LLAMA_ROOT}/build)
@@ -163,7 +137,6 @@ set(LLAMA_INCLUDE_DIRS
     ${LLAMA_ROOT}/include
     ${LLAMA_ROOT}/ggml/include
     ${LLAMA_ROOT}/common)
-
 set(LLAMA_SEARCH ${LLAMA_BUILD}/bin ${LLAMA_BUILD}/lib
                   ${LLAMA_BUILD}/src ${LLAMA_BUILD}/common
                   ${LLAMA_BUILD}/ggml/src ${LLAMA_BUILD}/ggml/src/ggml-cuda)
@@ -173,10 +146,20 @@ find_library(GGML_LIB         NAMES ggml      PATHS ${LLAMA_SEARCH} NO_DEFAULT_P
 find_library(GGML_BASE_LIB    NAMES ggml-base PATHS ${LLAMA_SEARCH} NO_DEFAULT_PATH)
 find_library(GGML_CUDA_LIB    NAMES ggml-cuda PATHS ${LLAMA_SEARCH} NO_DEFAULT_PATH)
 find_library(LLAMA_COMMON_LIB NAMES common    PATHS ${LLAMA_SEARCH} NO_DEFAULT_PATH)
+find_library(LLAVA_LIB        NAMES llava     PATHS ${LLAMA_SEARCH} NO_DEFAULT_PATH)
+
+if(EXISTS "${LLAMA_ROOT}/tools/mtmd/mtmd.h")
+    set(CARDINAL_MTMD_AVAILABLE ON)
+    message(STATUS "mtmd: found at ${LLAMA_ROOT}/tools/mtmd — vision will be enabled")
+    find_library(MTMD_LIB NAMES mtmd PATHS ${LLAMA_SEARCH} NO_DEFAULT_PATH)
+else()
+    set(CARDINAL_MTMD_AVAILABLE OFF)
+    message(STATUS "mtmd: NOT found — vision disabled (rebuild llama.cpp with -DLLAVA_BUILD=ON to enable mtmd)")
+endif()
 
 set(LLAMA_LIBRARIES ${LLAMA_LIB} ${GGML_LIB})
-foreach(L ${GGML_BASE_LIB} ${GGML_CUDA_LIB} ${LLAMA_COMMON_LIB})
-    if(L)
+foreach(L ${GGML_BASE_LIB} ${GGML_CUDA_LIB} ${LLAMA_COMMON_LIB} ${LLAVA_LIB})
+    if(L) 
         list(APPEND LLAMA_LIBRARIES ${L})
     endif()
 endforeach()
@@ -263,6 +246,12 @@ set(CARDINAL_VERIFIER_SOURCES
 set(CARDINAL_TOOLS_SOURCES
     src/tools/tool_registry.cpp
     src/tools/tool_executor.cpp
+    src/tools/builtin/analyze_image.cpp
+)
+
+set(CARDINAL_VISION_SOURCES
+    src/vision/vision_cache.cpp
+    src/vision/vision_encoder.cpp
 )
 
 set(CARDINAL_AGENT_SOURCES
@@ -294,6 +283,7 @@ set(CARDINAL_ALL_SOURCES
     ${CARDINAL_MEMORY_SOURCES}
     ${CARDINAL_VERIFIER_SOURCES}
     ${CARDINAL_TOOLS_SOURCES}
+    ${CARDINAL_VISION_SOURCES}
     ${CARDINAL_AGENT_SOURCES}
     ${CARDINAL_EXPLAINABILITY_SOURCES}
     ${CARDINAL_LEARNING_SOURCES}
@@ -322,6 +312,14 @@ endif()
 if(CARDINAL_ENABLE_TENSORRT)
     target_include_directories(cardinal PRIVATE ${TENSORRT_LLM_INCLUDE})
     target_link_libraries(cardinal PRIVATE tokenizers_cpp)
+endif()
+
+if(CARDINAL_MTMD_AVAILABLE)
+    target_compile_definitions(cardinal PRIVATE CARDINAL_MTMD_AVAILABLE)
+    target_include_directories(cardinal PRIVATE ${LLAMA_ROOT}/tools/mtmd)
+    if(MTMD_LIB)
+        list(APPEND LLAMA_LIBRARIES ${MTMD_LIB})
+    endif()
 endif()
 
 target_compile_definitions(cardinal PRIVATE
@@ -379,6 +377,6 @@ message(STATUS "=============================================================")
 message(STATUS "Build type:         ${CMAKE_BUILD_TYPE}")
 message(STATUS "CUDA arch:          ${CMAKE_CUDA_ARCHITECTURES}")
 message(STATUS "TensorRT backend:   ${CARDINAL_ENABLE_TENSORRT}")
-message(STATUS "Features:           tools + agent + explainability")
+message(STATUS "Features:           tools + agent + explainability + vision")
 message(STATUS "Output dir:         ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
 message(STATUS "=============================================================")

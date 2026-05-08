@@ -31,6 +31,8 @@ namespace cardinal {
     // Forward declarations — full definitions in their own headers
     class KnowledgeGraph;
     class EpisodicRetriever;
+    class VisionEncoder;
+    class VisionCache;
 
     // -------------------------------------------------------------------------
     // ConfirmationCallback
@@ -54,6 +56,9 @@ namespace cardinal {
         // ------------------------------------------------------------------
         void set_knowledge_graph(KnowledgeGraph* kg)      { kg_ = kg; }
         void set_retriever(EpisodicRetriever* retriever)  { retriever_ = retriever; }
+        void set_vision_encoder(VisionEncoder* encoder) { vision_encoder_ = encoder; }
+        void set_vision_cache(VisionCache* cache)         { vision_cache_   = cache; }
+
         void set_confirmation_callback(ConfirmationCallback cb) {
             confirmation_cb_ = std::move(cb);
         }
@@ -135,6 +140,8 @@ namespace cardinal {
         // Optional subsystem pointers (set after construction)
         KnowledgeGraph*        kg_        = nullptr;
         EpisodicRetriever*     retriever_ = nullptr;
+        VisionEncoder*         vision_encoder_ = nullptr;
+        VisionCache*           vision_cache_   = nullptr;
         ConfirmationCallback   confirmation_cb_;
 
         mutable std::mutex     exec_mutex_;

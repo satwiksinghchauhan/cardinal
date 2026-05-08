@@ -83,6 +83,9 @@ data/memory/*.json
 models/*.gguf
 models/*.bin
 models/*.ggml
+models/vision/*.gguf
+models/vision/*.bin
+models/vision/*.ggml
 
 # =============================================================================
 # IDE and Editor files

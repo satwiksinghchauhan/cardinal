@@ -23,6 +23,8 @@
 #include "learning/training_exporter.h"
 #include "tools/tool_registry.h"
 #include "tools/tool_executor.h"
+#include "vision/vision_encoder.h"
+#include "vision/vision_cache.h"
 #include "agent/agent_executor.h"
 #include "explainability/audit_log.h"
 #include "explainability/explainability_exporter.h"
@@ -111,6 +113,22 @@ namespace cardinal {
             tool_executor_ = std::make_unique<ToolExecutor>(*config_, *tool_registry_);
             tool_executor_->set_knowledge_graph(knowledge_graph_.get());
             tool_executor_->set_retriever(retriever_.get());
+
+            // Vision encoder (new in v1.3.0)
+            // Only initializes if vision.model_path is configured
+            vision_cache_   = std::make_unique<VisionCache>(*config_);
+            vision_cache_->init();
+
+            vision_encoder_ = std::make_unique<VisionEncoder>(*config_);
+            vision_encoder_->load();
+
+            if (vision_encoder_->is_ready()) {
+                tool_executor_->set_vision_encoder(vision_encoder_.get());
+                tool_executor_->set_vision_cache(vision_cache_.get());
+                LOG_INFO("Vision encoder ready (moondream2, CPU)");
+            } else {
+                LOG_INFO("Vision encoder not loaded — analyze_image tool disabled");
+            }
 
             // Explainability (new in v1.2.0)
             audit_log_ = std::make_unique<AuditLog>(*config_);
