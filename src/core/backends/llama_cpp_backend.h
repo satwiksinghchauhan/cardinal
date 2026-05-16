@@ -10,6 +10,8 @@
 // Handles GBNF-constrained decoding natively for Pass 1.
 //
 // Replaces: src/core/llm_engine.h / llm_engine.cpp
+//
+// v1.4.0: added get_llama_model() / get_llama_context() for LlamaCppTrainer.
 // =============================================================================
 
 #include "core/llm_backend.h"
@@ -17,7 +19,7 @@
 #include "utils/logger.h"
 #include "core/feeling_output.h"
 
-// llama.cpp headers
+// llama.cpp headers — llama_model, llama_context, llama_token all declared here.
 #include "llama.h"
 #include "llama-cpp.h"
 #include "common.h"
@@ -82,8 +84,6 @@ namespace cardinal {
 
         // ------------------------------------------------------------------
         // Tokenization utilities (llama.cpp specific — not on ILLMBackend)
-        // Used internally; also available if other core components need them
-        // without going through the interface.
         // ------------------------------------------------------------------
         std::vector<llama_token> tokenize(const std::string& text,
                                           bool add_special = true) const;
@@ -99,6 +99,14 @@ namespace cardinal {
         int         context_length() const;
         int         n_vocab()        const;
         int         n_embd()         const;
+
+        // ------------------------------------------------------------------
+        // LoRA adapter access — used by LlamaCppTrainer (Layer 3).
+        // llama.h is already included above so these types are fully declared.
+        // The adapter is applied to ctx_pass2_ (free-decoding context only).
+        // ------------------------------------------------------------------
+        llama_model*   get_llama_model()   const { return model_; }
+        llama_context* get_llama_context() const { return ctx_pass2_; }
 
     private:
         // ------------------------------------------------------------------

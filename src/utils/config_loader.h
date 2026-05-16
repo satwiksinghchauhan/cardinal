@@ -2,14 +2,17 @@
 // SPDX-FileCopyrightText: Copyright (C) 2026 Satwik Singh (Cardinal AGI)
 #pragma once
 // =============================================================================
-// Cardinal - Config Loader (v1.2.0)
+// Cardinal - Config Loader (v1.4.0)
 // File: src/utils/config_loader.h
 //
-// Changes from v1.1.0:
-//   - ToolsConfig expanded: each tool has its own config struct
-//   - AgentConfig added
-//   - ExplainabilityConfig added
-//   - CardinalConfig gains agent and explainability fields
+// Changes from v1.3.0:
+//   - SelfModelConfig            added
+//   - MetaCognitionConfig        added  (config-loader version, not the
+//                                        class-internal one in meta_cognition.h)
+//   - TrainingConfig             added
+//   - SelfImprovementConfig      added  (top-level wrapper)
+//   - CardinalConfig gains       self_improvement field
+//   - CardinalStatus gains       TRAINING_FAILED = 13, SELF_MODEL_ERROR = 14
 // =============================================================================
 
 #include <string>
@@ -19,7 +22,7 @@
 namespace cardinal {
 
     // -------------------------------------------------------------------------
-    // Backend configs (unchanged from v1.1.0)
+    // Backend configs (unchanged)
     // -------------------------------------------------------------------------
     struct BackendLlamaCppConfig {
         std::string model_path;
@@ -46,7 +49,7 @@ namespace cardinal {
     };
 
     // -------------------------------------------------------------------------
-    // Per-tool config structs (new in v1.2.0)
+    // Per-tool configs (unchanged from v1.3.0)
     // -------------------------------------------------------------------------
     struct WebSearchToolConfig {
         bool        enabled               = true;
@@ -72,7 +75,7 @@ namespace cardinal {
     struct RunPythonToolConfig {
         bool        enabled               = true;
         bool        confirmation_required = true;
-        std::string sandbox_mode          = "subprocess"; // "subprocess" | "docker"
+        std::string sandbox_mode          = "subprocess";
         std::string docker_image          = "python:3.12-slim";
         int         timeout_seconds       = 30;
         int         memory_limit_mb       = 256;
@@ -102,9 +105,6 @@ namespace cardinal {
         int  max_results           = 5;
     };
 
-    // -------------------------------------------------------------------------
-    // ToolsConfig (replaces original flat ToolsConfig)
-    // -------------------------------------------------------------------------
     struct ToolsConfig {
         bool home_access = false;
         WebSearchToolConfig      web_search;
@@ -118,23 +118,23 @@ namespace cardinal {
     };
 
     // -------------------------------------------------------------------------
-    // VisionConfig (new in v1.3.0)
+    // VisionConfig (unchanged from v1.3.0)
     // -------------------------------------------------------------------------
     struct VisionConfig {
-        std::string              model_path;       // path to moondream2 GGUF
-        std::string              mmproj_path;      // path to mmproj GGUF
-        int                      gpu_layers      = 0;    // 0 = CPU only
-        int                      threads         = 4;
-        int                      max_tokens      = 512;
-        std::string              cache_path      = "data/vision_cache";
-        int                      cache_ttl_hours = 24;   // 0 = keep forever
+        std::string              model_path;
+        std::string              mmproj_path;
+        int                      gpu_layers              = 0;
+        int                      threads                 = 4;
+        int                      max_tokens              = 512;
+        std::string              cache_path              = "data/vision_cache";
+        int                      cache_ttl_hours         = 24;
         int                      download_timeout_seconds = 30;
-        bool                     confirmation_required    = false;
-        std::vector<std::string> allowed_paths;   // for file:// inputs
+        bool                     confirmation_required   = false;
+        std::vector<std::string> allowed_paths;
     };
 
     // -------------------------------------------------------------------------
-    // AgentConfig (new in v1.2.0)
+    // AgentConfig (unchanged from v1.2.0)
     // -------------------------------------------------------------------------
     struct AgentConfig {
         bool        enabled                      = true;
@@ -149,7 +149,7 @@ namespace cardinal {
     };
 
     // -------------------------------------------------------------------------
-    // ExplainabilityConfig (new in v1.2.0)
+    // ExplainabilityConfig (unchanged from v1.2.0)
     // -------------------------------------------------------------------------
     struct ExplainabilityConfig {
         bool        enabled                  = true;
@@ -163,7 +163,82 @@ namespace cardinal {
     };
 
     // -------------------------------------------------------------------------
-    // Unchanged structs from v1.1.0
+    // SelfModelConfig  (new in v1.4.0)
+    // -------------------------------------------------------------------------
+    struct SelfModelConfig {
+        bool        enabled            = true;
+        std::string db_path            = "data/self_model/self_model.db";
+        bool        inject_into_prompt = true;
+        int         prompt_max_chars   = 500;
+        int         history_window     = 100;
+    };
+
+    // -------------------------------------------------------------------------
+    // MetaCognitionConfig  (new in v1.4.0)
+    // Config-loader struct — parallel to the one in meta_cognition.h but
+    // kept here so config_loader has no dependency on self_model headers.
+    // -------------------------------------------------------------------------
+    struct MetaCognitionLoaderConfig {
+        bool  enabled                            = true;
+        int   trigger_every_n_inferences         = 20;
+        float trigger_on_contradiction_rate_pct  = 30.0f;
+        bool  on_demand_via_api                  = true;
+        int   min_failures_to_reflect            = 5;
+        int   max_corrective_rules_per_session   = 10;
+        float corrective_rule_confidence         = 0.6f;
+    };
+
+    // -------------------------------------------------------------------------
+    // TrainingConfig  (new in v1.4.0)
+    // -------------------------------------------------------------------------
+    struct TrainingConfig {
+        bool        enabled                          = true;
+
+        // LoRA hyper-parameters.
+        int         lora_rank                        = 8;
+        int         lora_alpha                       = 16;
+        float       learning_rate                    = 0.0001f;
+        int         epochs                           = 3;
+        int         batch_size                       = 4;
+
+        // Episode selection.
+        int         min_episodes_for_training        = 50;
+        float       min_quality_confidence           = 0.75f;
+        int         max_examples                     = 0;    // 0 = no hard cap
+
+        // Trigger conditions.
+        int         trigger_every_n_episodes         = 100;
+        int         trigger_every_n_hours            = 24;
+        float       trigger_on_domain_confidence_below = 0.5f;
+
+        // Adapter load policy.
+        std::string adapter_load_policy              = "session_boundary";
+        float       eval_improvement_threshold_pct   = 5.0f;
+        int         eval_holdout_episodes            = 20;
+
+        // Paths.
+        std::string adapter_output_dir               = "data/training/adapters";
+        std::string dataset_output_dir               = "data/training/datasets";
+        std::string export_script_dir                = "data/training/scripts";
+        std::string hf_model_path                    = "models/qwen3.5-4b-hf";
+        std::string python_venv                      = "~/cardinal/cardinal-train-venv";
+        std::string convert_lora_script              = "vendor/llama.cpp/convert_lora_to_gguf.py";
+        std::string llama_finetune_binary            = "vendor/llama.cpp/build/bin/llama-finetune";
+    };
+
+    // -------------------------------------------------------------------------
+    // SelfImprovementConfig  (new in v1.4.0)
+    // Top-level wrapper for all three layers.
+    // -------------------------------------------------------------------------
+    struct SelfImprovementConfig {
+        bool                     enabled        = true;
+        SelfModelConfig          self_model;
+        MetaCognitionLoaderConfig meta_cognition;
+        TrainingConfig           training;
+    };
+
+    // -------------------------------------------------------------------------
+    // Unchanged structs from v1.3.0
     // -------------------------------------------------------------------------
     struct InferenceConfig {
         float temperature;
@@ -241,27 +316,28 @@ namespace cardinal {
     };
 
     // -------------------------------------------------------------------------
-    // CardinalConfig (v1.2.0)
+    // CardinalConfig (v1.4.0)
     // -------------------------------------------------------------------------
     struct CardinalConfig {
-        BackendConfig         backend;
-        InferenceConfig       inference;
-        FeelingSchemaConfig   feeling_schema;
-        MemoryConfig          memory;
-        VerifierConfig        verifier;
-        FeedbackConfig        feedback;
-        RetrieverConfig       retriever;
-        ApiConfig             api;
-        ToolsConfig           tools;           // expanded per-tool configs
-        AgentConfig           agent;
-        ExplainabilityConfig  explainability;
-        VisionConfig          vision;          // new in v1.3.0
-        BenchmarkConfig       benchmark;
-        LoggingConfig         logging;
+        BackendConfig          backend;
+        InferenceConfig        inference;
+        FeelingSchemaConfig    feeling_schema;
+        MemoryConfig           memory;
+        VerifierConfig         verifier;
+        FeedbackConfig         feedback;
+        RetrieverConfig        retriever;
+        ApiConfig              api;
+        ToolsConfig            tools;
+        AgentConfig            agent;
+        ExplainabilityConfig   explainability;
+        VisionConfig           vision;
+        SelfImprovementConfig  self_improvement;   // ← new in v1.4.0
+        BenchmarkConfig        benchmark;
+        LoggingConfig          logging;
     };
 
     // -------------------------------------------------------------------------
-    // ConfigLoader
+    // ConfigLoader (v1.4.0)
     // -------------------------------------------------------------------------
     class ConfigLoader {
     public:
@@ -271,22 +347,23 @@ namespace cardinal {
         static std::string    to_json_string(const CardinalConfig& config);
 
     private:
-        static BackendConfig          parse_backend(const auto& j);
-        static BackendLlamaCppConfig  parse_backend_llama_cpp(const auto& j);
-        static BackendTensorRTConfig  parse_backend_tensorrt(const auto& j);
-        static InferenceConfig        parse_inference(const auto& j);
-        static FeelingSchemaConfig    parse_feeling_schema(const auto& j);
-        static MemoryConfig           parse_memory(const auto& j);
-        static VerifierConfig         parse_verifier(const auto& j);
-        static FeedbackConfig         parse_feedback(const auto& j);
-        static RetrieverConfig        parse_retriever(const auto& j);
-        static ApiConfig              parse_api(const auto& j);
-        static ToolsConfig            parse_tools(const auto& j);       // expanded
-        static VisionConfig           parse_vision(const auto& j);      // new in v1.3.0
-        static AgentConfig            parse_agent(const auto& j);
-        static ExplainabilityConfig   parse_explainability(const auto& j); // new
-        static BenchmarkConfig        parse_benchmark(const auto& j);
-        static LoggingConfig          parse_logging(const auto& j);
+        static BackendConfig              parse_backend(const auto& j);
+        static BackendLlamaCppConfig      parse_backend_llama_cpp(const auto& j);
+        static BackendTensorRTConfig      parse_backend_tensorrt(const auto& j);
+        static InferenceConfig            parse_inference(const auto& j);
+        static FeelingSchemaConfig        parse_feeling_schema(const auto& j);
+        static MemoryConfig               parse_memory(const auto& j);
+        static VerifierConfig             parse_verifier(const auto& j);
+        static FeedbackConfig             parse_feedback(const auto& j);
+        static RetrieverConfig            parse_retriever(const auto& j);
+        static ApiConfig                  parse_api(const auto& j);
+        static ToolsConfig                parse_tools(const auto& j);
+        static VisionConfig               parse_vision(const auto& j);
+        static AgentConfig                parse_agent(const auto& j);
+        static ExplainabilityConfig       parse_explainability(const auto& j);
+        static SelfImprovementConfig      parse_self_improvement(const auto& j); // new
+        static BenchmarkConfig            parse_benchmark(const auto& j);
+        static LoggingConfig              parse_logging(const auto& j);
     };
 
     class ConfigError : public std::runtime_error {

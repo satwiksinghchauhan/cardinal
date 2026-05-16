@@ -2,16 +2,19 @@
 // SPDX-FileCopyrightText: Copyright (C) 2026 Satwik Singh (Cardinal AGI)
 #pragma once
 // =============================================================================
-// Cardinal - API Facade (v1.2.0)
+// Cardinal - API Facade (v1.4.0)
 // File: src/api/cardinal_api.h
 //
-// Changes from v1.1.0:
-//   - ToolRegistry, ToolExecutor owned here
-//   - AuditLog, ExplainabilityExporter owned here
-//   - AgentExecutor owned here
-//   - agent() method added
-//   - register_tools(), get_trace(), export_trace() added
-//   - ChatResponse extended with trace and agent_result
+// Changes from v1.3.0:
+//   - SelfImprovementLoop owned here
+//   - on_inference post-hook calls loop_.on_inference()
+//   - on_session_boundary() calls loop_.on_session_boundary()
+//   - New API methods:
+//       get_self_model_status()  → SelfImprovementStatus
+//       reflect()                → ReflectionResult   (Layer 2 on-demand)
+//       trigger_training()       → bool               (Layer 3 on-demand)
+//   - CardinalStatus extended: TRAINING_FAILED = 13, SELF_MODEL_ERROR = 14
+//   - SystemStats extended with SelfImprovementStatus field
 // =============================================================================
 
 #include "utils/config_loader.h"
@@ -25,6 +28,7 @@
 #include "tools/tool_result.h"
 #include "agent/agent_types.h"
 #include "explainability/reasoning_trace.h"
+#include "self_model/self_model_types.h"   // SelfImprovementStatus, ReflectionResult
 
 namespace cardinal {
     class RuleStore;
@@ -44,6 +48,7 @@ namespace cardinal {
     class AuditLog;
     class ExplainabilityExporter;
     class AgentExecutor;
+    class SelfImprovementLoop;      // ← new in v1.4.0
     struct Rule;
     struct EpisodeRecord;
     struct FeelingOutput;
@@ -86,7 +91,7 @@ namespace cardinal {
         CardinalResult<std::vector<std::string>> list_sessions() const;
 
         // ------------------------------------------------------------------
-        // Inference (unchanged signature, richer response)
+        // Inference (unchanged signature)
         // ------------------------------------------------------------------
         CardinalResult<ChatResponse> chat(const std::string& session_id,
                                           const std::string& message);
@@ -95,21 +100,21 @@ namespace cardinal {
                                                   const ApiStreamCallback& stream_cb);
 
         // ------------------------------------------------------------------
-        // Agentic execution (new in v1.2.0)
+        // Agentic execution (unchanged from v1.2.0)
         // ------------------------------------------------------------------
         CardinalResult<ChatResponse> agent(const std::string& session_id,
                                            const std::string& goal,
                                            int                max_iterations = 0);
 
         // ------------------------------------------------------------------
-        // Tool management (new in v1.2.0)
+        // Tool management (unchanged from v1.2.0)
         // ------------------------------------------------------------------
         CardinalVoidResult register_tools(const std::vector<ToolDefinition>& tools);
         CardinalVoidResult unregister_tool(const std::string& name);
         CardinalResult<std::vector<ToolDefinition>> list_tools() const;
 
         // ------------------------------------------------------------------
-        // Explainability (new in v1.2.0)
+        // Explainability (unchanged from v1.2.0)
         // ------------------------------------------------------------------
         CardinalResult<std::string>  get_trace(const std::string& inference_id) const;
         CardinalResult<std::string>  export_trace(const std::string& inference_id) const;
@@ -135,6 +140,29 @@ namespace cardinal {
         // ------------------------------------------------------------------
         CardinalResult<ExportInfo> export_training_data(const ExportRequest& request);
         CardinalResult<ExportInfo> export_dry_run(const ExportRequest& request) const;
+
+        // ------------------------------------------------------------------
+        // Self-Improvement (new in v1.4.0)
+        // ------------------------------------------------------------------
+
+        // Returns the current state of all three self-improvement layers.
+        // Mapped to GET /self_model by the HTTP server.
+        CardinalResult<SelfImprovementStatus> get_self_model_status() const;
+
+        // Trigger an on-demand Layer 2 reflection pass.
+        // Runs synchronously; may take several seconds.
+        // Mapped to POST /reflect by the HTTP server.
+        CardinalResult<ReflectionResult> reflect();
+
+        // Post a Layer 3 training request to the background thread.
+        // Returns immediately (training is async).
+        // domain_hint="" lets CurriculumBuilder decide the target domain.
+        // Mapped to POST /train by the HTTP server.
+        CardinalResult<bool> trigger_training(const std::string& domain_hint = "");
+
+        // Called by the HTTP server / session manager between sessions.
+        // Applies any pending adapter approved by AdapterEvaluator.
+        void on_session_boundary();
 
         // ------------------------------------------------------------------
         // Settings (unchanged)
@@ -184,16 +212,21 @@ namespace cardinal {
         std::unique_ptr<ToolRegistry>          tool_registry_;
         std::unique_ptr<ToolExecutor>          tool_executor_;
 
-        // Vision (new in v1.3.0)
+        // Vision
         std::unique_ptr<VisionEncoder>         vision_encoder_;
         std::unique_ptr<VisionCache>           vision_cache_;
 
-        // Explainability (new)
+        // Explainability
         std::unique_ptr<AuditLog>              audit_log_;
         std::unique_ptr<ExplainabilityExporter> exporter_;
 
-        // Agent (new)
+        // Agent
         std::unique_ptr<AgentExecutor>         agent_executor_;
+
+        // Self-Improvement (new in v1.4.0)
+        // Owns Layers 1-3: SelfModel, MetaCognition, CurriculumBuilder,
+        // DatasetCurator, ITrainingBackend, AdapterEvaluator.
+        std::unique_ptr<SelfImprovementLoop>   self_improvement_;
 
         // API layer
         std::unique_ptr<TrainingExporter>      training_exporter_;

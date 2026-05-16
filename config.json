@@ -5,7 +5,7 @@
       "model_path": "models/Qwen_Qwen3.5-4B-Q4_K_M.gguf",
       "chat_template": "qwen3",
       "context_length": 8192,
-      "gpu_layers": 33,
+      "gpu_layers": 12,
       "threads": 8
     },
     "tensorrt": {
@@ -151,19 +151,6 @@
     "export_path": "data/explainability/exports",
     "attach_trace_to_response": true
   },
-  "benchmark": {
-    "dataset": "data/babi_tasks.json",
-    "metrics": [
-      "consistency",
-      "parseability",
-      "accuracy"
-    ],
-    "eval_frequency_seconds": 3600
-  },
-  "logging": {
-    "level": "info",
-    "path": "logs/cardinal.log"
-  },
   "vision": {
     "model_path": "models/vision/moondream2-text-model-Q4_K_M.gguf",
     "mmproj_path": "models/vision/moondream2-mmproj-f16.gguf",
@@ -179,5 +166,61 @@
       "~/Downloads/",
       "data/"
     ]
+  },
+  "self_improvement": {
+    "enabled": true,
+    "self_model": {
+      "enabled": true,
+      "db_path": "data/self_model/self_model.db",
+      "inject_into_prompt": true,
+      "prompt_max_chars": 500,
+      "history_window": 100
+    },
+    "meta_cognition": {
+      "enabled": true,
+      "trigger_every_n_inferences": 20,
+      "trigger_on_contradiction_rate_pct": 30.0,
+      "on_demand_via_api": true,
+      "min_failures_to_reflect": 5,
+      "max_corrective_rules_per_session": 10,
+      "corrective_rule_confidence": 0.6
+    },
+    "training": {
+      "enabled": true,
+      "lora_rank": 8,
+      "lora_alpha": 16,
+      "learning_rate": 0.0001,
+      "epochs": 3,
+      "batch_size": 4,
+      "min_episodes_for_training": 50,
+      "min_quality_confidence": 0.75,
+      "max_examples": 0,
+      "trigger_every_n_episodes": 100,
+      "trigger_every_n_hours": 24,
+      "trigger_on_domain_confidence_below": 0.5,
+      "adapter_load_policy": "session_boundary",
+      "eval_improvement_threshold_pct": 5.0,
+      "eval_holdout_episodes": 20,
+      "adapter_output_dir": "data/training/adapters",
+      "dataset_output_dir": "data/training/datasets",
+      "export_script_dir": "data/training/scripts",
+      "hf_model_path": "models/qwen3.5-4b-hf",
+      "python_venv": "~/cardinal/cardinal-train-venv",
+      "convert_lora_script": "vendor/llama.cpp/convert_lora_to_gguf.py",
+      "llama_finetune_binary": "vendor/llama.cpp/build/bin/llama-finetune"
+    }
+  },
+  "benchmark": {
+    "dataset": "data/babi_tasks.json",
+    "metrics": [
+      "consistency",
+      "parseability",
+      "accuracy"
+    ],
+    "eval_frequency_seconds": 3600
+  },
+  "logging": {
+    "level": "info",
+    "path": "logs/cardinal.log"
   }
 }

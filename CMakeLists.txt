@@ -1,5 +1,5 @@
 # =============================================================================
-# Cardinal - Root CMakeLists.txt (v1.3.0)
+# Cardinal - Root CMakeLists.txt (v1.4.0)
 # Neurosymbolic AGI Architecture
 # =============================================================================
 # Offline-first: uses vendored repos when present, falls back to FetchContent.
@@ -8,7 +8,7 @@
 cmake_minimum_required(VERSION 3.28)
 
 project(Cardinal
-    VERSION 1.3.0
+    VERSION 1.4.0
     DESCRIPTION "Neurosymbolic AGI Architecture"
     LANGUAGES CXX CUDA
 )
@@ -60,7 +60,6 @@ add_compile_options(
 include(FetchContent)
 set(FETCHCONTENT_QUIET OFF)
 
-# Helper macro: only fetch if the source directory does NOT already exist
 macro(fetch_if_missing name repo tag)
     if(NOT EXISTS "${CMAKE_SOURCE_DIR}/vendor/${name}")
         message(STATUS "Fetching ${name} (missing from vendor/${name})")
@@ -71,36 +70,28 @@ macro(fetch_if_missing name repo tag)
         FetchContent_MakeAvailable(${name})
     else()
         message(STATUS "Using vendored ${name} (vendor/${name})")
-        # Make the target available (if it's a CMake project) or just set variables.
-        # For nlohmann/json, cpp-httplib, muparser, tokenizers-cpp we can still
-        # add their include paths manually. Here we just ensure the directory is known.
         if(EXISTS "${CMAKE_SOURCE_DIR}/vendor/${name}/CMakeLists.txt")
             add_subdirectory("${CMAKE_SOURCE_DIR}/vendor/${name}" "${CMAKE_CURRENT_BINARY_DIR}/vendor-${name}")
         else()
-            # For plain header-only libs or special cases, we just note the path.
             message(STATUS "Vendored ${name} exists but no CMakeLists.txt -- include paths must be set manually")
         endif()
     endif()
 endmacro()
 
-# nlohmann/json
 fetch_if_missing(nlohmann_json
     https://github.com/nlohmann/json.git
     v3.11.3)
 
-# cpp-httplib
 fetch_if_missing(cpp-httplib
     https://github.com/yhirose/cpp-httplib.git
     v0.18.3)
 
-# muparser
 fetch_if_missing(muparser
     https://github.com/beltoforion/muparser.git
     v2.3.4)
 set(ENABLE_SAMPLES OFF CACHE BOOL "" FORCE)
 set(ENABLE_OPENMP  OFF CACHE BOOL "" FORCE)
 
-# tokenizers-cpp (only if TensorRT is enabled)
 if(CARDINAL_ENABLE_TENSORRT)
     fetch_if_missing(tokenizers_cpp
         https://github.com/mlc-ai/tokenizers-cpp.git
@@ -109,7 +100,7 @@ if(CARDINAL_ENABLE_TENSORRT)
 endif()
 
 # -----------------------------------------------------------------------------
-# System dependencies (no changes needed here)
+# System dependencies
 # -----------------------------------------------------------------------------
 find_package(OpenSSL REQUIRED)
 message(STATUS "OpenSSL: ${OPENSSL_VERSION}")
@@ -154,21 +145,19 @@ if(EXISTS "${LLAMA_ROOT}/tools/mtmd/mtmd.h")
     find_library(MTMD_LIB NAMES mtmd PATHS ${LLAMA_SEARCH} NO_DEFAULT_PATH)
 else()
     set(CARDINAL_MTMD_AVAILABLE OFF)
-    message(STATUS "mtmd: NOT found — vision disabled (rebuild llama.cpp with -DLLAVA_BUILD=ON to enable mtmd)")
+    message(STATUS "mtmd: NOT found — vision disabled")
 endif()
 
 set(LLAMA_LIBRARIES ${LLAMA_LIB} ${GGML_LIB})
 foreach(L ${GGML_BASE_LIB} ${GGML_CUDA_LIB} ${LLAMA_COMMON_LIB} ${LLAVA_LIB})
-    if(L) 
+    if(L)
         list(APPEND LLAMA_LIBRARIES ${L})
     endif()
 endforeach()
 
-# CUDA
 find_package(CUDAToolkit REQUIRED)
 message(STATUS "CUDA: ${CUDAToolkit_VERSION}")
 
-# SWI-Prolog
 if(PkgConfig_FOUND)
     pkg_check_modules(SWIPL QUIET swipl)
 endif()
@@ -188,7 +177,6 @@ endif()
 message(STATUS "SWI-Prolog: ${SWIPL_INCLUDE_DIR}")
 add_compile_definitions(CARDINAL_PROLOG_ENABLED)
 
-# TensorRT-LLM (optional)
 if(CARDINAL_ENABLE_TENSORRT)
     if(NOT DEFINED TRT_LLM_INCLUDE_DIR)
         set(TRT_LLM_INCLUDE_DIR /usr/local/include)
@@ -270,6 +258,22 @@ set(CARDINAL_LEARNING_SOURCES
     src/learning/training_exporter.cpp
 )
 
+# v1.4.0 — Self-Improvement (Layers 1-3)
+set(CARDINAL_SELF_MODEL_SOURCES
+    src/self_model/self_model.cpp
+    src/self_model/meta_cognition.cpp
+)
+
+set(CARDINAL_TRAINING_SOURCES
+    src/training/training_factory.cpp
+    src/training/llama_cpp_trainer.cpp
+    src/training/tensorrt_trainer.cpp
+    src/training/curriculum_builder.cpp
+    src/training/dataset_curator.cpp
+    src/training/adapter_evaluator.cpp
+    src/training/self_improvement_loop.cpp
+)
+
 set(CARDINAL_API_SOURCES
     src/api/cardinal_settings.cpp
     src/api/session.cpp
@@ -287,6 +291,8 @@ set(CARDINAL_ALL_SOURCES
     ${CARDINAL_AGENT_SOURCES}
     ${CARDINAL_EXPLAINABILITY_SOURCES}
     ${CARDINAL_LEARNING_SOURCES}
+    ${CARDINAL_SELF_MODEL_SOURCES}
+    ${CARDINAL_TRAINING_SOURCES}
     ${CARDINAL_API_SOURCES}
     src/main.cpp
 )
@@ -359,7 +365,6 @@ if(CARDINAL_ENABLE_TENSORRT)
         CUDA::cuda_driver)
 endif()
 
-# RPATH
 set(CARDINAL_RPATH "${LLAMA_BUILD}/lib;${LLAMA_BUILD}/bin")
 if(CARDINAL_ENABLE_TENSORRT)
     list(APPEND CARDINAL_RPATH "${TRT_LLM_LIB_DIR}")
@@ -378,5 +383,6 @@ message(STATUS "Build type:         ${CMAKE_BUILD_TYPE}")
 message(STATUS "CUDA arch:          ${CMAKE_CUDA_ARCHITECTURES}")
 message(STATUS "TensorRT backend:   ${CARDINAL_ENABLE_TENSORRT}")
 message(STATUS "Features:           tools + agent + explainability + vision")
+message(STATUS "                    + self-improvement (layers 1-3)")
 message(STATUS "Output dir:         ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
 message(STATUS "=============================================================")

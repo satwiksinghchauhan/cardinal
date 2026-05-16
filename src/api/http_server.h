@@ -56,6 +56,7 @@
 
 #include "api/cardinal_api.h"
 #include "utils/config_loader.h"
+#include "self_model/self_model_types.h"   // SelfImprovementStatus, ReflectionResult
 
 #include <string>
 #include <atomic>
@@ -127,6 +128,11 @@ namespace cardinal {
         void handle_destroy_session(const httplib::Request& req, httplib::Response& res);
         void handle_reset_session(const httplib::Request& req, httplib::Response& res);
 
+        // v1.4.0 — Self-Improvement
+        void handle_self_model(const httplib::Request& req, httplib::Response& res);
+        void handle_reflect   (const httplib::Request& req, httplib::Response& res);
+        void handle_train     (const httplib::Request& req, httplib::Response& res);
+
         // -- JSON response helpers --
 
         // Send a success JSON response
@@ -158,6 +164,8 @@ namespace cardinal {
         static std::string scan_result_to_json(const ScanResult& r);
         static std::string settings_to_json(const CardinalSettings& s);
         static std::string session_info_to_json(const SessionInfo& info);
+        static std::string self_improvement_status_to_json(const SelfImprovementStatus& s);
+        static std::string reflection_result_to_json(const ReflectionResult& r);
 
         // -- Members --
         CardinalAPI& api_;

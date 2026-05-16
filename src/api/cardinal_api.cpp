@@ -28,6 +28,7 @@
 #include "agent/agent_executor.h"
 #include "explainability/audit_log.h"
 #include "explainability/explainability_exporter.h"
+#include "training/self_improvement_loop.h"   // v1.4.0 — needed for unique_ptr destructor
 
 #include <sstream>
 #include <iomanip>
@@ -155,6 +156,16 @@ namespace cardinal {
             sessions_ = std::make_unique<SessionManager>();
             sessions_->create();
 
+            // Self-Improvement (new in v1.4.0) — Layers 1, 2, 3
+            if (config_->self_improvement.enabled) {
+                self_improvement_ = std::make_unique<SelfImprovementLoop>(
+                    *config_, *storage_, *rule_store_, *backend_);
+                self_improvement_->start();
+                LOG_INFO("Self-Improvement loop started (Layers 1-3)");
+            } else {
+                LOG_INFO("Self-Improvement disabled in config");
+            }
+
             initialized_.store(true);
 
             LOG_INFO("CardinalAPI initialized — episodes=" +
@@ -227,6 +238,8 @@ namespace cardinal {
         if (!sessions_->destroy(id))
             return CardinalVoidResult::failure(
                 CardinalStatus::SESSION_NOT_FOUND, "Session not found: " + id);
+        // v1.4.0 — apply any pending LoRA adapter at session boundary
+        on_session_boundary();
         return CardinalVoidResult::success();
     }
 
@@ -797,6 +810,17 @@ namespace cardinal {
             storage_->set_extracted_rule_id(ep_id, cr.committed_rule_id);
         if (rule_store_->is_dirty()) rule_store_->save();
 
+        // v1.4.0 — notify self-improvement loop (Layers 1 + 2)
+        if (self_improvement_) {
+            self_improvement_->on_inference(
+                resp.feeling.reasoning_domain,
+                resp.feeling.reasoning_type,
+                resp.feeling.confidence,
+                resp.feeling.contradiction_flag,
+                resp.feeling.uncertainty_flag,
+                cr.rule_committed);
+        }
+
         ChatResponse chat_resp;
         chat_resp.session_id              = session_id;
         chat_resp.response                = resp.response;
@@ -867,6 +891,59 @@ namespace cardinal {
                 CardinalStatus::NOT_INITIALIZED,
                 "CardinalAPI not initialized — call init() first");
         return CardinalVoidResult::success();
+    }
+
+    // =========================================================================
+    // Self-Improvement (v1.4.0)
+    // =========================================================================
+
+    CardinalResult<SelfImprovementStatus> CardinalAPI::get_self_model_status() const {
+        auto check = check_initialized();
+        if (!check.ok())
+            return CardinalResult<SelfImprovementStatus>::failure(
+                check.status, check.error_message);
+
+        if (!self_improvement_) {
+            // Self-improvement disabled — return zeroed status.
+            SelfImprovementStatus s;
+            return CardinalResult<SelfImprovementStatus>::success(s);
+        }
+
+        return CardinalResult<SelfImprovementStatus>::success(
+            self_improvement_->get_status());
+    }
+
+    CardinalResult<ReflectionResult> CardinalAPI::reflect() {
+        auto check = check_initialized();
+        if (!check.ok())
+            return CardinalResult<ReflectionResult>::failure(
+                check.status, check.error_message);
+
+        if (!self_improvement_) {
+            ReflectionResult r;
+            r.error_message = "Self-improvement is disabled in config";
+            return CardinalResult<ReflectionResult>::success(r);
+        }
+
+        ReflectionResult r = self_improvement_->trigger_reflection();
+        return CardinalResult<ReflectionResult>::success(r);
+    }
+
+    CardinalResult<bool> CardinalAPI::trigger_training(
+            const std::string& domain_hint) {
+        auto check = check_initialized();
+        if (!check.ok())
+            return CardinalResult<bool>::failure(check.status, check.error_message);
+
+        if (!self_improvement_)
+            return CardinalResult<bool>::success(false);
+
+        bool posted = self_improvement_->trigger_training(domain_hint);
+        return CardinalResult<bool>::success(posted);
+    }
+
+    void CardinalAPI::on_session_boundary() {
+        if (self_improvement_) self_improvement_->on_session_boundary();
     }
 
 } // namespace cardinal

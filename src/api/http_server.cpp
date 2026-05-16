@@ -175,6 +175,22 @@ namespace cardinal {
             [this](const httplib::Request& req, httplib::Response& res) {
                 handle_export(req, res);
             });
+
+        // v1.4.0 — Self-Improvement
+        server_->Get("/api/self_model",
+            [this](const httplib::Request& req, httplib::Response& res) {
+                handle_self_model(req, res);
+            });
+
+        server_->Post("/api/reflect",
+            [this](const httplib::Request& req, httplib::Response& res) {
+                handle_reflect(req, res);
+            });
+
+        server_->Post("/api/train",
+            [this](const httplib::Request& req, httplib::Response& res) {
+                handle_train(req, res);
+            });
     }
 
     // =========================================================================
@@ -824,6 +840,113 @@ namespace cardinal {
         }
         j["history"] = history;
         return j.dump();
+    }
+
+    // =========================================================================
+    // v1.4.0 — Self-Improvement handlers
+    // =========================================================================
+
+    void HttpServer::handle_self_model(const httplib::Request& req,
+        httplib::Response& res) {
+        if (!check_auth(req, res)) return;
+
+        auto result = api_.get_self_model_status();
+        if (!result.ok()) {
+            send_error(res, 500, result.status, result.error_message);
+            return;
+        }
+        send_ok(res, self_improvement_status_to_json(result.value));
+    }
+
+    void HttpServer::handle_reflect(const httplib::Request& req,
+        httplib::Response& res) {
+        if (!check_auth(req, res)) return;
+
+        auto result = api_.reflect();
+        if (!result.ok()) {
+            send_error(res, 500, result.status, result.error_message);
+            return;
+        }
+        send_ok(res, reflection_result_to_json(result.value));
+    }
+
+    void HttpServer::handle_train(const httplib::Request& req,
+        httplib::Response& res) {
+        if (!check_auth(req, res)) return;
+
+        // Optional domain_hint in request body.
+        std::string domain_hint;
+        if (!req.body.empty()) {
+            try {
+                auto body = json::parse(req.body);
+                domain_hint = body.value("domain_hint", std::string(""));
+            } catch (...) {}
+        }
+
+        auto result = api_.trigger_training(domain_hint);
+        if (!result.ok()) {
+            send_error(res, 500, result.status, result.error_message);
+            return;
+        }
+
+        json j;
+        j["accepted"]     = result.value;
+        j["domain_hint"]  = domain_hint;
+        j["message"]      = result.value
+            ? "Training request posted to background thread"
+            : "Training not started (disabled or already running)";
+        send_ok(res, j.dump());
+    }
+
+    // =========================================================================
+    // v1.4.0 — JSON serialization helpers
+    // =========================================================================
+
+    std::string HttpServer::self_improvement_status_to_json(
+        const SelfImprovementStatus& s) {
+        json j;
+        // Layer 1
+        j["self_model_enabled"]    = s.self_model_enabled;
+        j["weakest_domain"]        = s.weakest_domain;
+        j["strongest_domain"]      = s.strongest_domain;
+        j["total_domain_stats"]    = s.total_domain_stats;
+        // Layer 2
+        j["meta_cognition_enabled"]  = s.meta_cognition_enabled;
+        j["total_reflections"]       = s.total_reflections;
+        j["total_corrective_rules"]  = s.total_corrective_rules;
+        j["last_reflection_at"]      = s.last_reflection_at;
+        // Layer 3
+        j["training_enabled"]        = s.training_enabled;
+        j["total_training_runs"]     = s.total_training_runs;
+        j["last_training_at"]        = s.last_training_at;
+        j["active_adapter_path"]     = s.active_adapter_path;
+        j["last_improvement_pct"]    = s.last_improvement_pct;
+        return j.dump(2);
+    }
+
+    std::string HttpServer::reflection_result_to_json(const ReflectionResult& r) {
+        json j;
+        j["ran"]               = r.ran;
+        j["trigger"]           = r.trigger;
+        j["episodes_analyzed"] = r.episodes_analyzed;
+        j["failures_analyzed"] = r.failures_analyzed;
+        j["rules_committed"]   = r.rules_committed;
+        j["duration_ms"]       = r.duration_ms;
+        j["timestamp"]         = r.timestamp;
+        j["error_message"]     = r.error_message;
+
+        json findings = json::array();
+        for (const auto& f : r.findings) {
+            json fi;
+            fi["domain"]         = f.domain;
+            fi["pattern"]        = f.pattern;
+            fi["recommendation"] = f.recommendation;
+            fi["confidence"]     = f.confidence;
+            fi["timestamp"]      = f.timestamp;
+            findings.push_back(fi);
+        }
+        j["findings"] = findings;
+        return j.dump(2);
     }
 
 } // namespace cardinal

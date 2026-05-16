@@ -2,6 +2,9 @@
 # Cardinal .gitignore
 # =============================================================================
 
+# Venv
+cardinal-train-venv/
+
 # Build directories (CMake output)
 build/
 out/
@@ -80,12 +83,8 @@ data/memory/*.json
 !data/memory/*.template.json
 
 # Model files (too large, user provides)
-models/*.gguf
-models/*.bin
-models/*.ggml
-models/vision/*.gguf
-models/vision/*.bin
-models/vision/*.ggml
+models/*
+!models/*.gitkeep
 
 # =============================================================================
 # IDE and Editor files
