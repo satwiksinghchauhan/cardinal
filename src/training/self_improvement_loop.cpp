@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: AGPL-3.0-only
-// SPDX-FileCopyrightText: Copyright (C) 2026 Satwik Singh (Cardinal AGI)
 // =============================================================================
 // Cardinal - Self-Improvement Loop — Implementation
 // File: src/training/self_improvement_loop.cpp

@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: AGPL-3.0-only
-// SPDX-FileCopyrightText: Copyright (C) 2026 Satwik Singh (Cardinal AGI)
 // =============================================================================
 // Cardinal - TensorRT Training Backend — Implementation
 // File: src/training/tensorrt_trainer.cpp

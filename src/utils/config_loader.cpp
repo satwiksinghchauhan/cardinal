@@ -1,16 +1,12 @@
-// SPDX-License-Identifier: AGPL-3.0-only
-// SPDX-FileCopyrightText: Copyright (C) 2026 Satwik Singh (Cardinal AGI)
 // =============================================================================
-// Cardinal - Config Loader Implementation (v1.2.0)
+// Cardinal - Config Loader Implementation (v1.5.0)
 // File: src/utils/config_loader.cpp
 //
-// Changes from v1.1.0:
-//   - parse_tools() fully rewritten for per-tool structs
-//   - parse_agent() added
-//   - parse_explainability() added
-//   - load() calls parse_agent and parse_explainability
-//   - validate() extended for agent and explainability sections
-//   - to_json_string() extended
+// Changes from v1.3.0:
+//   v1.4.0: parse_self_improvement() added; load() wired;
+//           to_json_string() extended with self_improvement block
+//   v1.5.0: parse_scheduler() + parse_computer_use() added; load() wired;
+//           to_json_string() extended with scheduler + computer_use blocks
 // =============================================================================
 
 #include "config_loader.h"
@@ -79,21 +75,25 @@ namespace cardinal {
 
         CardinalConfig config;
         try {
-            config.backend        = parse_backend(j.at("backend"));
-            config.inference      = parse_inference(j.at("inference"));
-            config.feeling_schema = parse_feeling_schema(j.at("feeling_schema"));
-            config.memory         = parse_memory(j.at("memory"));
-            config.verifier       = parse_verifier(j.at("verifier"));
-            config.feedback       = parse_feedback(j.at("feedback"));
-            config.retriever      = parse_retriever(j.at("retriever"));
-            config.api            = parse_api(j.at("api"));
-            config.tools          = parse_tools(j.at("tools"));
-            config.vision         = parse_vision(j.value("vision", json::object()));
-            config.agent          = parse_agent(j.value("agent", json::object()));
-            config.explainability = parse_explainability(
-                j.value("explainability", json::object()));
-            config.benchmark      = parse_benchmark(j.at("benchmark"));
-            config.logging        = parse_logging(j.at("logging"));
+            config.backend          = parse_backend(j.at("backend"));
+            config.inference        = parse_inference(j.at("inference"));
+            config.feeling_schema   = parse_feeling_schema(j.at("feeling_schema"));
+            config.memory           = parse_memory(j.at("memory"));
+            config.verifier         = parse_verifier(j.at("verifier"));
+            config.feedback         = parse_feedback(j.at("feedback"));
+            config.retriever        = parse_retriever(j.at("retriever"));
+            config.api              = parse_api(j.at("api"));
+            config.tools            = parse_tools(j.at("tools"));
+            config.vision           = parse_vision(j.value("vision", json::object()));
+            config.agent            = parse_agent(j.value("agent", json::object()));
+            config.explainability   = parse_explainability(
+                                          j.value("explainability", json::object()));
+            config.self_improvement = parse_self_improvement(
+                                          j.value("self_improvement", json::object()));
+            config.scheduler        = parse_scheduler(j);       // v1.5.0
+            config.computer_use     = parse_computer_use(j);    // v1.5.0
+            config.benchmark        = parse_benchmark(j.at("benchmark"));
+            config.logging          = parse_logging(j.at("logging"));
         }
         catch (const ConfigError&) { throw; }
         catch (const json::exception& e) {
@@ -115,7 +115,7 @@ namespace cardinal {
     // =========================================================================
 
     void ConfigLoader::validate(const CardinalConfig& config) {
-        // Backend validation (unchanged from v1.1.0)
+        // Backend
         const std::vector<std::string> valid_types = { "llama_cpp", "tensorrt" };
         bool valid = false;
         for (const auto& t : valid_types)
@@ -198,11 +198,25 @@ namespace cardinal {
         if (config.api.auth_enabled && config.api.api_key.empty())
             throw ConfigError("api.api_key cannot be empty when auth_enabled=true");
 
+        // Scheduler (v1.5.0) — soft validation only, no hard errors for optional fields
+        if (config.scheduler.enabled) {
+            if (config.scheduler.check_interval_seconds < 1)
+                throw ConfigError("scheduler.check_interval_seconds must be >= 1");
+            if (config.scheduler.max_concurrent_tasks < 1)
+                throw ConfigError("scheduler.max_concurrent_tasks must be >= 1");
+        }
+
+        // Computer use (v1.5.0) — no hard errors, all optional
+        if (config.computer_use.enabled &&
+            config.computer_use.safety.confirmation_timeout_seconds < 1)
+            throw ConfigError(
+                "computer_use.safety.confirmation_timeout_seconds must be >= 1");
+
         LOG_DEBUG("Config validation passed");
     }
 
     // =========================================================================
-    // Backend parsers (unchanged from v1.1.0)
+    // Backend parsers
     // =========================================================================
 
     BackendConfig ConfigLoader::parse_backend(const auto& j) {
@@ -242,14 +256,13 @@ namespace cardinal {
     }
 
     // =========================================================================
-    // parse_tools (fully rewritten for per-tool structs)
+    // parse_tools
     // =========================================================================
 
     ToolsConfig ConfigLoader::parse_tools(const auto& j) {
         ToolsConfig c;
         c.home_access = opt<bool>(j, "home_access", false);
 
-        // web_search
         if (j.contains("web_search") && j["web_search"].is_object()) {
             const auto& ws = j["web_search"];
             c.web_search.enabled               = opt<bool>(ws, "enabled", true);
@@ -258,7 +271,6 @@ namespace cardinal {
             c.web_search.timeout_seconds       = opt<int>(ws, "timeout_seconds", 10);
         }
 
-        // web_fetch
         if (j.contains("web_fetch") && j["web_fetch"].is_object()) {
             const auto& wf = j["web_fetch"];
             c.web_fetch.enabled               = opt<bool>(wf, "enabled", true);
@@ -269,14 +281,12 @@ namespace cardinal {
             c.web_fetch.blocked_domains       = opt_string_array(wf, "blocked_domains");
         }
 
-        // calculator
         if (j.contains("calculator") && j["calculator"].is_object()) {
             const auto& calc = j["calculator"];
             c.calculator.enabled               = opt<bool>(calc, "enabled", true);
             c.calculator.confirmation_required = opt<bool>(calc, "confirmation_required", false);
         }
 
-        // run_python
         if (j.contains("run_python") && j["run_python"].is_object()) {
             const auto& rp = j["run_python"];
             c.run_python.enabled               = opt<bool>(rp, "enabled", true);
@@ -288,7 +298,6 @@ namespace cardinal {
             c.run_python.network_enabled       = opt<bool>(rp, "network_enabled", false);
         }
 
-        // file_read
         if (j.contains("file_read") && j["file_read"].is_object()) {
             const auto& fr = j["file_read"];
             c.file_read.enabled               = opt<bool>(fr, "enabled", true);
@@ -296,7 +305,6 @@ namespace cardinal {
             c.file_read.allowed_paths         = opt_string_array(fr, "allowed_paths");
         }
 
-        // file_write
         if (j.contains("file_write") && j["file_write"].is_object()) {
             const auto& fw = j["file_write"];
             c.file_write.enabled               = opt<bool>(fw, "enabled", true);
@@ -304,7 +312,6 @@ namespace cardinal {
             c.file_write.allowed_paths         = opt_string_array(fw, "allowed_paths");
         }
 
-        // knowledge_graph_query
         if (j.contains("knowledge_graph_query") &&
             j["knowledge_graph_query"].is_object()) {
             const auto& kg = j["knowledge_graph_query"];
@@ -312,7 +319,6 @@ namespace cardinal {
             c.knowledge_graph.confirmation_required = opt<bool>(kg, "confirmation_required", false);
         }
 
-        // episodic_search
         if (j.contains("episodic_search") && j["episodic_search"].is_object()) {
             const auto& es = j["episodic_search"];
             c.episodic_search.enabled               = opt<bool>(es, "enabled", true);
@@ -324,28 +330,29 @@ namespace cardinal {
     }
 
     // =========================================================================
-    // parse_vision (new in v1.3.0)
+    // parse_vision (v1.3.0)
     // =========================================================================
 
     VisionConfig ConfigLoader::parse_vision(const auto& j) {
         VisionConfig c;
-        c.model_path                  = opt<std::string>(j, "model_path", "");
-        c.mmproj_path                 = opt<std::string>(j, "mmproj_path", "");
-        c.gpu_layers                  = opt<int>(j, "gpu_layers", 0);
-        c.threads                     = opt<int>(j, "threads", 4);
-        c.max_tokens                  = opt<int>(j, "max_tokens", 512);
-        c.cache_path                  = opt<std::string>(j, "cache_path",
-                                            "data/vision_cache");
-        c.cache_ttl_hours             = opt<int>(j, "cache_ttl_hours", 24);
-        c.download_timeout_seconds    = opt<int>(j, "download_timeout_seconds", 30);
-        c.confirmation_required       = opt<bool>(j, "confirmation_required", false);
-        c.allowed_paths               = opt_string_array(j, "allowed_paths");
+        c.model_path               = opt<std::string>(j, "model_path", "");
+        c.mmproj_path              = opt<std::string>(j, "mmproj_path", "");
+        c.gpu_layers               = opt<int>(j, "gpu_layers", 0);
+        c.threads                  = opt<int>(j, "threads", 4);
+        c.max_tokens               = opt<int>(j, "max_tokens", 512);
+        c.cache_path               = opt<std::string>(j, "cache_path", "data/vision_cache");
+        c.cache_ttl_hours          = opt<int>(j, "cache_ttl_hours", 24);
+        c.download_timeout_seconds = opt<int>(j, "download_timeout_seconds", 30);
+        c.confirmation_required    = opt<bool>(j, "confirmation_required", false);
+        c.allowed_paths            = opt_string_array(j, "allowed_paths");
         return c;
     }
 
     // =========================================================================
     // parse_agent
-AgentConfig ConfigLoader::parse_agent(const auto& j) {
+    // =========================================================================
+
+    AgentConfig ConfigLoader::parse_agent(const auto& j) {
         AgentConfig c;
         c.enabled                      = opt<bool>(j, "enabled", true);
         c.max_iterations               = opt<int>(j, "max_iterations", 10);
@@ -361,7 +368,7 @@ AgentConfig ConfigLoader::parse_agent(const auto& j) {
     }
 
     // =========================================================================
-    // parse_explainability (new)
+    // parse_explainability
     // =========================================================================
 
     ExplainabilityConfig ConfigLoader::parse_explainability(const auto& j) {
@@ -378,6 +385,176 @@ AgentConfig ConfigLoader::parse_agent(const auto& j) {
         c.export_path              = opt<std::string>(j, "export_path",
                                          "data/explainability/exports");
         c.attach_trace_to_response = opt<bool>(j, "attach_trace_to_response", true);
+        return c;
+    }
+
+    // =========================================================================
+    // parse_self_improvement (v1.4.0)
+    // =========================================================================
+
+    SelfImprovementConfig ConfigLoader::parse_self_improvement(const auto& j) {
+        SelfImprovementConfig c;
+        c.enabled = opt<bool>(j, "enabled", true);
+
+        if (j.contains("self_model") && j["self_model"].is_object()) {
+            const auto& sm = j["self_model"];
+            c.self_model.enabled            = opt<bool>(sm, "enabled", true);
+            c.self_model.db_path            = opt<std::string>(sm, "db_path",
+                                                 "data/self_model/self_model.db");
+            c.self_model.inject_into_prompt = opt<bool>(sm, "inject_into_prompt", true);
+            c.self_model.prompt_max_chars   = opt<int>(sm, "prompt_max_chars", 500);
+            c.self_model.history_window     = opt<int>(sm, "history_window", 100);
+        }
+
+        if (j.contains("meta_cognition") && j["meta_cognition"].is_object()) {
+            const auto& mc = j["meta_cognition"];
+            c.meta_cognition.enabled                           =
+                opt<bool>(mc, "enabled", true);
+            c.meta_cognition.trigger_every_n_inferences        =
+                opt<int>(mc, "trigger_every_n_inferences", 20);
+            c.meta_cognition.trigger_on_contradiction_rate_pct =
+                opt<float>(mc, "trigger_on_contradiction_rate_pct", 30.0f);
+            c.meta_cognition.on_demand_via_api                 =
+                opt<bool>(mc, "on_demand_via_api", true);
+            c.meta_cognition.min_failures_to_reflect           =
+                opt<int>(mc, "min_failures_to_reflect", 5);
+            c.meta_cognition.max_corrective_rules_per_session  =
+                opt<int>(mc, "max_corrective_rules_per_session", 10);
+            c.meta_cognition.corrective_rule_confidence        =
+                opt<float>(mc, "corrective_rule_confidence", 0.6f);
+        }
+
+        if (j.contains("training") && j["training"].is_object()) {
+            const auto& tr = j["training"];
+            c.training.enabled                           = opt<bool>(tr, "enabled", true);
+            c.training.lora_rank                         = opt<int>(tr, "lora_rank", 8);
+            c.training.lora_alpha                        = opt<int>(tr, "lora_alpha", 16);
+            c.training.learning_rate                     = opt<float>(tr, "learning_rate", 0.0001f);
+            c.training.epochs                            = opt<int>(tr, "epochs", 3);
+            c.training.batch_size                        = opt<int>(tr, "batch_size", 4);
+            c.training.min_episodes_for_training         = opt<int>(tr, "min_episodes_for_training", 50);
+            c.training.min_quality_confidence            = opt<float>(tr, "min_quality_confidence", 0.75f);
+            c.training.max_examples                      = opt<int>(tr, "max_examples", 0);
+            c.training.trigger_every_n_episodes          = opt<int>(tr, "trigger_every_n_episodes", 100);
+            c.training.trigger_every_n_hours             = opt<int>(tr, "trigger_every_n_hours", 24);
+            c.training.trigger_on_domain_confidence_below =
+                opt<float>(tr, "trigger_on_domain_confidence_below", 0.5f);
+            c.training.adapter_load_policy               = opt<std::string>(tr, "adapter_load_policy",
+                                                               "session_boundary");
+            c.training.eval_improvement_threshold_pct    = opt<float>(tr, "eval_improvement_threshold_pct", 5.0f);
+            c.training.eval_holdout_episodes             = opt<int>(tr, "eval_holdout_episodes", 20);
+            c.training.adapter_output_dir                = opt<std::string>(tr, "adapter_output_dir",
+                                                               "data/training/adapters");
+            c.training.dataset_output_dir                = opt<std::string>(tr, "dataset_output_dir",
+                                                               "data/training/datasets");
+            c.training.export_script_dir                 = opt<std::string>(tr, "export_script_dir",
+                                                               "data/training/scripts");
+            c.training.hf_model_path                     = opt<std::string>(tr, "hf_model_path",
+                                                               "models/qwen3.5-4b-hf");
+            c.training.python_venv                       = opt<std::string>(tr, "python_venv",
+                                                               "~/cardinal/cardinal-train-venv");
+            c.training.convert_lora_script               = opt<std::string>(tr, "convert_lora_script",
+                                                               "vendor/llama.cpp/convert_lora_to_gguf.py");
+            c.training.llama_finetune_binary             = opt<std::string>(tr, "llama_finetune_binary",
+                                                               "vendor/llama.cpp/build/bin/llama-finetune");
+        }
+
+        return c;
+    }
+
+    // =========================================================================
+    // parse_scheduler (v1.5.0)
+    // =========================================================================
+
+    SchedulerConfig ConfigLoader::parse_scheduler(const auto& j) {
+        SchedulerConfig c;
+        if (!j.contains("scheduler")) return c;
+        const auto& s = j["scheduler"];
+        c.enabled                   = opt<bool>(s, "enabled", false);
+        c.db_path                   = opt<std::string>(s, "db_path",
+                                          "data/scheduler/scheduler.db");
+        c.check_interval_seconds    = opt<int>(s, "check_interval_seconds", 30);
+        c.max_concurrent_tasks      = opt<int>(s, "max_concurrent_tasks", 1);
+        c.idle_threshold_minutes    = opt<int>(s, "idle_threshold_minutes", 5);
+        c.task_session_prefix       = opt<std::string>(s, "task_session_prefix", "scheduler_");
+        c.run_history_max_entries   = opt<int>(s, "run_history_max_entries", 1000);
+        c.max_task_duration_seconds = opt<int>(s, "max_task_duration_seconds", 300);
+        return c;
+    }
+
+    // =========================================================================
+    // parse_computer_use (v1.5.0)
+    // =========================================================================
+
+    ComputerUseConfig ConfigLoader::parse_computer_use(const auto& j) {
+        ComputerUseConfig c;
+        if (!j.contains("computer_use")) return c;
+        const auto& cu = j["computer_use"];
+        c.enabled = opt<bool>(cu, "enabled", false);
+
+        if (cu.contains("safety") && cu["safety"].is_object()) {
+            const auto& sf = cu["safety"];
+            c.safety.whitelist_enabled            = opt<bool>(sf, "whitelist_enabled", true);
+            c.safety.confirmation_required        = opt<bool>(sf, "confirmation_required", true);
+            c.safety.confirmation_timeout_seconds = opt<int>(sf, "confirmation_timeout_seconds", 30);
+            c.safety.watch_mode                   = opt<bool>(sf, "watch_mode", true);
+            c.safety.full_autonomy                = opt<bool>(sf, "full_autonomy", false);
+            c.safety.allow_file_write             = opt<bool>(sf, "allow_file_write", false);
+            c.safety.allowed_apps     = opt_string_array(sf, "allowed_apps");
+            c.safety.allowed_domains  = opt_string_array(sf, "allowed_domains");
+            c.safety.allowed_paths    = opt_string_array(sf, "allowed_paths");
+            if (sf.contains("blocked_commands") && sf["blocked_commands"].is_array()) {
+                c.safety.blocked_commands.clear();
+                c.safety.blocked_commands = opt_string_array(sf, "blocked_commands");
+            }
+        }
+
+        if (cu.contains("screen") && cu["screen"].is_object()) {
+            const auto& sc = cu["screen"];
+            c.screen.screenshot_tool        = opt<std::string>(sc, "screenshot_tool", "auto");
+            c.screen.vision_analysis        = opt<bool>(sc, "vision_analysis", true);
+            c.screen.watch_interval_seconds = opt<int>(sc, "watch_interval_seconds", 2);
+        }
+
+        if (cu.contains("browser") && cu["browser"].is_object()) {
+            const auto& br = cu["browser"];
+            c.browser.executable            = opt<std::string>(br, "executable", "google-chrome");
+            c.browser.venv_path             = opt<std::string>(br, "venv_path",
+                                                 "~/cardinal/cardinal-browser-venv");
+            c.browser.playwright_timeout_ms = opt<int>(br, "playwright_timeout_ms", 10000);
+            c.browser.headless              = opt<bool>(br, "headless", false);
+            c.browser.user_data_dir         = opt<std::string>(br, "user_data_dir",
+                                                 "data/browser_profile");
+        }
+
+        if (cu.contains("shell") && cu["shell"].is_object()) {
+            const auto& sh = cu["shell"];
+            c.shell.enabled           = opt<bool>(sh, "enabled", true);
+            c.shell.shell             = opt<std::string>(sh, "shell", "/bin/bash");
+            c.shell.timeout_seconds   = opt<int>(sh, "timeout_seconds", 30);
+            c.shell.working_directory = opt<std::string>(sh, "working_directory", "~");
+        }
+
+        if (cu.contains("email") && cu["email"].is_object()) {
+            const auto& em = cu["email"];
+            c.email.enabled                = opt<bool>(em, "enabled", false);
+            c.email.mode                   = opt<std::string>(em, "mode", "imap_smtp");
+            c.email.imap_host              = opt<std::string>(em, "imap_host", "");
+            c.email.imap_port              = opt<int>(em, "imap_port", 993);
+            c.email.smtp_host              = opt<std::string>(em, "smtp_host", "");
+            c.email.smtp_port              = opt<int>(em, "smtp_port", 587);
+            c.email.address                = opt<std::string>(em, "address", "");
+            c.email.gmail_api_enabled      = opt<bool>(em, "gmail_api_enabled", false);
+            c.email.gmail_credentials_path = opt<std::string>(em, "gmail_credentials_path",
+                                                 "data/gmail_credentials.json");
+        }
+
+        if (cu.contains("atspi") && cu["atspi"].is_object()) {
+            const auto& at = cu["atspi"];
+            c.atspi.enabled            = opt<bool>(at, "enabled", true);
+            c.atspi.fallback_to_vision = opt<bool>(at, "fallback_to_vision", true);
+        }
+
         return c;
     }
 
@@ -484,18 +661,19 @@ AgentConfig ConfigLoader::parse_agent(const auto& j) {
     }
 
     // =========================================================================
-    // to_json_string (extended)
+    // to_json_string
     // =========================================================================
 
     std::string ConfigLoader::to_json_string(const CardinalConfig& config) {
         json j;
 
+        // Backend
         j["backend"]["type"] = config.backend.type;
-        j["backend"]["llama_cpp"]["model_path"]     = config.backend.llama_cpp.model_path;
-        j["backend"]["llama_cpp"]["chat_template"]  = config.backend.llama_cpp.chat_template;
-        j["backend"]["llama_cpp"]["context_length"] = config.backend.llama_cpp.context_length;
-        j["backend"]["llama_cpp"]["gpu_layers"]     = config.backend.llama_cpp.gpu_layers;
-        j["backend"]["llama_cpp"]["threads"]        = config.backend.llama_cpp.threads;
+        j["backend"]["llama_cpp"]["model_path"]       = config.backend.llama_cpp.model_path;
+        j["backend"]["llama_cpp"]["chat_template"]    = config.backend.llama_cpp.chat_template;
+        j["backend"]["llama_cpp"]["context_length"]   = config.backend.llama_cpp.context_length;
+        j["backend"]["llama_cpp"]["gpu_layers"]       = config.backend.llama_cpp.gpu_layers;
+        j["backend"]["llama_cpp"]["threads"]          = config.backend.llama_cpp.threads;
         j["backend"]["tensorrt"]["engine_path"]       = config.backend.tensorrt.engine_path;
         j["backend"]["tensorrt"]["tokenizer_path"]    = config.backend.tensorrt.tokenizer_path;
         j["backend"]["tensorrt"]["chat_template"]     = config.backend.tensorrt.chat_template;
@@ -504,6 +682,7 @@ AgentConfig ConfigLoader::parse_agent(const auto& j) {
         j["backend"]["tensorrt"]["kv_cache_fraction"] = config.backend.tensorrt.kv_cache_fraction;
         j["backend"]["tensorrt"]["use_int8"]          = config.backend.tensorrt.use_int8;
 
+        // Inference
         j["inference"]["temperature"]         = config.inference.temperature;
         j["inference"]["top_p"]               = config.inference.top_p;
         j["inference"]["max_tokens_feeling"]  = config.inference.max_tokens_feeling;
@@ -515,15 +694,12 @@ AgentConfig ConfigLoader::parse_agent(const auto& j) {
         j["tools"]["web_search"]["confirmation_required"] = t.web_search.confirmation_required;
         j["tools"]["web_search"]["max_results"]           = t.web_search.max_results;
         j["tools"]["web_search"]["timeout_seconds"]       = t.web_search.timeout_seconds;
-
-        j["tools"]["web_fetch"]["enabled"]               = t.web_fetch.enabled;
-        j["tools"]["web_fetch"]["confirmation_required"] = t.web_fetch.confirmation_required;
-        j["tools"]["web_fetch"]["timeout_seconds"]       = t.web_fetch.timeout_seconds;
-        j["tools"]["web_fetch"]["max_content_kb"]        = t.web_fetch.max_content_kb;
-
+        j["tools"]["web_fetch"]["enabled"]                = t.web_fetch.enabled;
+        j["tools"]["web_fetch"]["confirmation_required"]  = t.web_fetch.confirmation_required;
+        j["tools"]["web_fetch"]["timeout_seconds"]        = t.web_fetch.timeout_seconds;
+        j["tools"]["web_fetch"]["max_content_kb"]         = t.web_fetch.max_content_kb;
         j["tools"]["calculator"]["enabled"]               = t.calculator.enabled;
         j["tools"]["calculator"]["confirmation_required"] = t.calculator.confirmation_required;
-
         j["tools"]["run_python"]["enabled"]               = t.run_python.enabled;
         j["tools"]["run_python"]["confirmation_required"] = t.run_python.confirmation_required;
         j["tools"]["run_python"]["sandbox_mode"]          = t.run_python.sandbox_mode;
@@ -531,18 +707,14 @@ AgentConfig ConfigLoader::parse_agent(const auto& j) {
         j["tools"]["run_python"]["timeout_seconds"]       = t.run_python.timeout_seconds;
         j["tools"]["run_python"]["memory_limit_mb"]       = t.run_python.memory_limit_mb;
         j["tools"]["run_python"]["network_enabled"]       = t.run_python.network_enabled;
-
-        j["tools"]["file_read"]["enabled"]               = t.file_read.enabled;
-        j["tools"]["file_read"]["confirmation_required"] = t.file_read.confirmation_required;
-        j["tools"]["file_read"]["allowed_paths"]         = t.file_read.allowed_paths;
-
+        j["tools"]["file_read"]["enabled"]                = t.file_read.enabled;
+        j["tools"]["file_read"]["confirmation_required"]  = t.file_read.confirmation_required;
+        j["tools"]["file_read"]["allowed_paths"]          = t.file_read.allowed_paths;
         j["tools"]["file_write"]["enabled"]               = t.file_write.enabled;
         j["tools"]["file_write"]["confirmation_required"] = t.file_write.confirmation_required;
         j["tools"]["file_write"]["allowed_paths"]         = t.file_write.allowed_paths;
-
         j["tools"]["knowledge_graph_query"]["enabled"]               = t.knowledge_graph.enabled;
         j["tools"]["knowledge_graph_query"]["confirmation_required"] = t.knowledge_graph.confirmation_required;
-
         j["tools"]["episodic_search"]["enabled"]               = t.episodic_search.enabled;
         j["tools"]["episodic_search"]["confirmation_required"] = t.episodic_search.confirmation_required;
         j["tools"]["episodic_search"]["max_results"]           = t.episodic_search.max_results;
@@ -583,6 +755,83 @@ AgentConfig ConfigLoader::parse_agent(const auto& j) {
         j["vision"]["confirmation_required"]    = v.confirmation_required;
         j["vision"]["allowed_paths"]            = v.allowed_paths;
 
+        // Self-improvement (v1.4.0)
+        const auto& si = config.self_improvement;
+        j["self_improvement"]["enabled"]                                        = si.enabled;
+        j["self_improvement"]["self_model"]["enabled"]                          = si.self_model.enabled;
+        j["self_improvement"]["self_model"]["db_path"]                          = si.self_model.db_path;
+        j["self_improvement"]["self_model"]["inject_into_prompt"]               = si.self_model.inject_into_prompt;
+        j["self_improvement"]["self_model"]["prompt_max_chars"]                 = si.self_model.prompt_max_chars;
+        j["self_improvement"]["self_model"]["history_window"]                   = si.self_model.history_window;
+        j["self_improvement"]["meta_cognition"]["enabled"]                      = si.meta_cognition.enabled;
+        j["self_improvement"]["meta_cognition"]["trigger_every_n_inferences"]   = si.meta_cognition.trigger_every_n_inferences;
+        j["self_improvement"]["meta_cognition"]["trigger_on_contradiction_rate_pct"] = si.meta_cognition.trigger_on_contradiction_rate_pct;
+        j["self_improvement"]["meta_cognition"]["on_demand_via_api"]            = si.meta_cognition.on_demand_via_api;
+        j["self_improvement"]["meta_cognition"]["min_failures_to_reflect"]      = si.meta_cognition.min_failures_to_reflect;
+        j["self_improvement"]["meta_cognition"]["max_corrective_rules_per_session"] = si.meta_cognition.max_corrective_rules_per_session;
+        j["self_improvement"]["meta_cognition"]["corrective_rule_confidence"]   = si.meta_cognition.corrective_rule_confidence;
+        j["self_improvement"]["training"]["enabled"]                            = si.training.enabled;
+        j["self_improvement"]["training"]["lora_rank"]                          = si.training.lora_rank;
+        j["self_improvement"]["training"]["lora_alpha"]                         = si.training.lora_alpha;
+        j["self_improvement"]["training"]["learning_rate"]                      = si.training.learning_rate;
+        j["self_improvement"]["training"]["epochs"]                             = si.training.epochs;
+        j["self_improvement"]["training"]["batch_size"]                         = si.training.batch_size;
+        j["self_improvement"]["training"]["min_episodes_for_training"]          = si.training.min_episodes_for_training;
+        j["self_improvement"]["training"]["min_quality_confidence"]             = si.training.min_quality_confidence;
+        j["self_improvement"]["training"]["adapter_output_dir"]                 = si.training.adapter_output_dir;
+        j["self_improvement"]["training"]["dataset_output_dir"]                 = si.training.dataset_output_dir;
+        j["self_improvement"]["training"]["hf_model_path"]                      = si.training.hf_model_path;
+        j["self_improvement"]["training"]["python_venv"]                        = si.training.python_venv;
+
+        // Scheduler (v1.5.0)
+        const auto& sc = config.scheduler;
+        j["scheduler"]["enabled"]                   = sc.enabled;
+        j["scheduler"]["db_path"]                   = sc.db_path;
+        j["scheduler"]["check_interval_seconds"]    = sc.check_interval_seconds;
+        j["scheduler"]["max_concurrent_tasks"]      = sc.max_concurrent_tasks;
+        j["scheduler"]["idle_threshold_minutes"]    = sc.idle_threshold_minutes;
+        j["scheduler"]["task_session_prefix"]       = sc.task_session_prefix;
+        j["scheduler"]["run_history_max_entries"]   = sc.run_history_max_entries;
+        j["scheduler"]["max_task_duration_seconds"] = sc.max_task_duration_seconds;
+
+        // Computer use (v1.5.0)
+        const auto& cu = config.computer_use;
+        j["computer_use"]["enabled"]                                       = cu.enabled;
+        j["computer_use"]["safety"]["whitelist_enabled"]                   = cu.safety.whitelist_enabled;
+        j["computer_use"]["safety"]["allowed_apps"]                        = cu.safety.allowed_apps;
+        j["computer_use"]["safety"]["allowed_domains"]                     = cu.safety.allowed_domains;
+        j["computer_use"]["safety"]["allowed_paths"]                       = cu.safety.allowed_paths;
+        j["computer_use"]["safety"]["blocked_commands"]                    = cu.safety.blocked_commands;
+        j["computer_use"]["safety"]["confirmation_required"]               = cu.safety.confirmation_required;
+        j["computer_use"]["safety"]["confirmation_timeout_seconds"]        = cu.safety.confirmation_timeout_seconds;
+        j["computer_use"]["safety"]["watch_mode"]                          = cu.safety.watch_mode;
+        j["computer_use"]["safety"]["full_autonomy"]                       = cu.safety.full_autonomy;
+        j["computer_use"]["safety"]["allow_file_write"]                    = cu.safety.allow_file_write;
+        j["computer_use"]["screen"]["screenshot_tool"]                     = cu.screen.screenshot_tool;
+        j["computer_use"]["screen"]["vision_analysis"]                     = cu.screen.vision_analysis;
+        j["computer_use"]["screen"]["watch_interval_seconds"]              = cu.screen.watch_interval_seconds;
+        j["computer_use"]["browser"]["executable"]                         = cu.browser.executable;
+        j["computer_use"]["browser"]["venv_path"]                          = cu.browser.venv_path;
+        j["computer_use"]["browser"]["playwright_timeout_ms"]              = cu.browser.playwright_timeout_ms;
+        j["computer_use"]["browser"]["headless"]                           = cu.browser.headless;
+        j["computer_use"]["browser"]["user_data_dir"]                      = cu.browser.user_data_dir;
+        j["computer_use"]["shell"]["enabled"]                              = cu.shell.enabled;
+        j["computer_use"]["shell"]["shell"]                                = cu.shell.shell;
+        j["computer_use"]["shell"]["timeout_seconds"]                      = cu.shell.timeout_seconds;
+        j["computer_use"]["shell"]["working_directory"]                    = cu.shell.working_directory;
+        j["computer_use"]["email"]["enabled"]                              = cu.email.enabled;
+        j["computer_use"]["email"]["mode"]                                 = cu.email.mode;
+        j["computer_use"]["email"]["imap_host"]                            = cu.email.imap_host;
+        j["computer_use"]["email"]["imap_port"]                            = cu.email.imap_port;
+        j["computer_use"]["email"]["smtp_host"]                            = cu.email.smtp_host;
+        j["computer_use"]["email"]["smtp_port"]                            = cu.email.smtp_port;
+        j["computer_use"]["email"]["address"]                              = cu.email.address;
+        j["computer_use"]["email"]["gmail_api_enabled"]                    = cu.email.gmail_api_enabled;
+        j["computer_use"]["email"]["gmail_credentials_path"]               = cu.email.gmail_credentials_path;
+        j["computer_use"]["atspi"]["enabled"]                              = cu.atspi.enabled;
+        j["computer_use"]["atspi"]["fallback_to_vision"]                   = cu.atspi.fallback_to_vision;
+
+        // Logging
         j["logging"]["level"] = config.logging.level;
         j["logging"]["path"]  = config.logging.path;
 

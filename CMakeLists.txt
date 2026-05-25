@@ -1,5 +1,5 @@
 # =============================================================================
-# Cardinal - Root CMakeLists.txt (v1.4.0)
+# Cardinal - Root CMakeLists.txt (v1.5.0)
 # Neurosymbolic AGI Architecture
 # =============================================================================
 # Offline-first: uses vendored repos when present, falls back to FetchContent.
@@ -8,7 +8,7 @@
 cmake_minimum_required(VERSION 3.28)
 
 project(Cardinal
-    VERSION 1.4.0
+    VERSION 1.5.0
     DESCRIPTION "Neurosymbolic AGI Architecture"
     LANGUAGES CXX CUDA
 )
@@ -197,6 +197,16 @@ if(CARDINAL_ENABLE_TENSORRT)
 endif()
 
 # -----------------------------------------------------------------------------
+# Threads (v1.5.0 addition)
+# -----------------------------------------------------------------------------
+find_package(Threads REQUIRED)
+
+# -----------------------------------------------------------------------------
+# SQLite3 (v1.5.0 - ensure find_package works)
+# -----------------------------------------------------------------------------
+find_package(SQLite3 REQUIRED)
+
+# -----------------------------------------------------------------------------
 # Source files
 # -----------------------------------------------------------------------------
 set(CARDINAL_UTILS_SOURCES
@@ -258,7 +268,7 @@ set(CARDINAL_LEARNING_SOURCES
     src/learning/training_exporter.cpp
 )
 
-# v1.4.0 — Self-Improvement (Layers 1-3)
+# v1.5.0 — Self-Improvement (Layers 1-3)
 set(CARDINAL_SELF_MODEL_SOURCES
     src/self_model/self_model.cpp
     src/self_model/meta_cognition.cpp
@@ -281,6 +291,47 @@ set(CARDINAL_API_SOURCES
     src/api/http_server.cpp
 )
 
+# v1.5.0 — New subsystems
+set(CARDINAL_SCHEDULER_SOURCES
+    src/scheduler/scheduler_store.cpp
+    src/scheduler/scheduler_parser.cpp
+    src/scheduler/scheduler_engine.cpp
+)
+
+set(CARDINAL_COMPUTER_SOURCES
+    src/computer/display_detector.cpp
+    src/computer/screen_reader.cpp
+    src/computer/input_controller.cpp
+    src/computer/app_controller.cpp
+    src/computer/browser_controller.cpp
+    src/computer/shell_executor.cpp
+    src/computer/file_manager.cpp
+    src/computer/system_controller.cpp
+    src/computer/email_controller.cpp
+    src/computer/atspi_reader.cpp
+)
+
+set(CARDINAL_WATCH_SOURCES
+    src/watch/file_watcher.cpp
+    src/watch/screen_watcher.cpp
+    src/watch/process_watcher.cpp
+)
+
+set(CARDINAL_COMPUTER_TOOLS_SOURCES
+    src/tools/builtin/computer/tool_screenshot.cpp
+    src/tools/builtin/computer/tool_click.cpp
+    src/tools/builtin/computer/tool_type_text.cpp
+    src/tools/builtin/computer/tool_open_app.cpp
+    src/tools/builtin/computer/tool_close_app.cpp
+    src/tools/builtin/computer/tool_browser.cpp
+    src/tools/builtin/computer/tool_shell_run.cpp
+    src/tools/builtin/computer/tool_file_ops.cpp
+    src/tools/builtin/computer/tool_system_control.cpp
+    src/tools/builtin/computer/tool_email.cpp
+    src/tools/builtin/computer/tool_watch_screen.cpp
+    src/tools/builtin/computer/tool_schedule_task.cpp
+)
+
 set(CARDINAL_ALL_SOURCES
     ${CARDINAL_UTILS_SOURCES}
     ${CARDINAL_CORE_SOURCES}
@@ -294,6 +345,10 @@ set(CARDINAL_ALL_SOURCES
     ${CARDINAL_SELF_MODEL_SOURCES}
     ${CARDINAL_TRAINING_SOURCES}
     ${CARDINAL_API_SOURCES}
+    ${CARDINAL_SCHEDULER_SOURCES}
+    ${CARDINAL_COMPUTER_SOURCES}
+    ${CARDINAL_WATCH_SOURCES}
+    ${CARDINAL_COMPUTER_TOOLS_SOURCES}
     src/main.cpp
 )
 
@@ -307,6 +362,10 @@ target_include_directories(cardinal PRIVATE
     ${LLAMA_INCLUDE_DIRS}
     ${CUDAToolkit_INCLUDE_DIRS}
     ${SWIPL_INCLUDE_DIR}
+    # v1.5.0 - new subsystem headers
+    src/scheduler
+    src/computer
+    src/watch
 )
 
 if(DEFINED SQLITE3_SYSTEM AND SQLITE3_SYSTEM)
@@ -351,6 +410,9 @@ target_link_libraries(cardinal PRIVATE
     ${SWIPL_LIB}
     pthread
     dl
+    # v1.5.0 - additional libraries
+    SQLite::SQLite3
+    Threads::Threads
 )
 
 if(DEFINED SQLITE3_SYSTEM AND SQLITE3_SYSTEM)
@@ -374,6 +436,34 @@ set_target_properties(cardinal PROPERTIES
     INSTALL_RPATH "${CARDINAL_RPATH}")
 
 # -----------------------------------------------------------------------------
+# Browser venv setup target (v1.5.0 - optional helper)
+# -----------------------------------------------------------------------------
+add_custom_target(setup_browser_venv
+    COMMAND python3 -m venv "${CMAKE_SOURCE_DIR}/cardinal-browser-venv"
+    COMMAND "${CMAKE_SOURCE_DIR}/cardinal-browser-venv/bin/pip"
+            install playwright --quiet
+    COMMAND "${CMAKE_SOURCE_DIR}/cardinal-browser-venv/bin/playwright"
+            install chromium
+    COMMENT "Setting up cardinal-browser-venv with Playwright..."
+    VERBATIM
+)
+
+# -----------------------------------------------------------------------------
+# Data directory creation (v1.5.0 - add new directories)
+# -----------------------------------------------------------------------------
+add_custom_command(TARGET cardinal POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+            "${CMAKE_SOURCE_DIR}/data/scheduler"
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+            "${CMAKE_SOURCE_DIR}/data/screenshots"
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+            "${CMAKE_SOURCE_DIR}/data/browser_profile"
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+            "${CMAKE_SOURCE_DIR}/data/browser_helper"
+    COMMENT "Creating v1.5.0 data directories..."
+)
+
+# -----------------------------------------------------------------------------
 # Summary
 # -----------------------------------------------------------------------------
 message(STATUS "=============================================================")
@@ -384,5 +474,6 @@ message(STATUS "CUDA arch:          ${CMAKE_CUDA_ARCHITECTURES}")
 message(STATUS "TensorRT backend:   ${CARDINAL_ENABLE_TENSORRT}")
 message(STATUS "Features:           tools + agent + explainability + vision")
 message(STATUS "                    + self-improvement (layers 1-3)")
+message(STATUS "                    + scheduler + computer use + watch")
 message(STATUS "Output dir:         ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
 message(STATUS "=============================================================")

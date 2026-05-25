@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: AGPL-3.0-only
-// SPDX-FileCopyrightText: Copyright (C) 2026 Satwik Singh (Cardinal AGI)
 #pragma once
 // =============================================================================
 // Cardinal - Tool Executor
@@ -33,6 +31,16 @@ namespace cardinal {
     class EpisodicRetriever;
     class VisionEncoder;
     class VisionCache;
+    // v1.5.0
+    class ScreenReader;
+    class InputController;
+    class AppController;
+    class BrowserController;
+    class ShellExecutor;
+    class FileManager;
+    class SystemController;
+    class EmailController;
+    class SchedulerEngine;
 
     // -------------------------------------------------------------------------
     // ConfirmationCallback
@@ -62,6 +70,17 @@ namespace cardinal {
         void set_confirmation_callback(ConfirmationCallback cb) {
             confirmation_cb_ = std::move(cb);
         }
+
+        // v1.5.0 — Computer Use + Scheduler
+        void set_screen_reader(ScreenReader* sr)           { screen_reader_      = sr; }
+        void set_input_controller(InputController* ic)     { input_controller_   = ic; }
+        void set_app_controller(AppController* ac)         { app_controller_     = ac; }
+        void set_browser_controller(BrowserController* bc) { browser_controller_ = bc; }
+        void set_shell_executor(ShellExecutor* se)         { shell_executor_     = se; }
+        void set_file_manager(FileManager* fm)             { file_manager_       = fm; }
+        void set_system_controller(SystemController* sc)   { system_controller_  = sc; }
+        void set_email_controller(EmailController* ec)     { email_controller_   = ec; }
+        void set_scheduler(SchedulerEngine* sched)         { scheduler_          = sched; }
 
         // ------------------------------------------------------------------
         // Detection
@@ -106,6 +125,22 @@ namespace cardinal {
         ToolResult execute_kg_query(const ToolCall& call)     const;
         ToolResult execute_episodic_search(const ToolCall& call) const;
 
+        // v1.5.0 — Computer Use tools
+        ToolResult execute_screenshot(const ToolCall& call)       const;
+        ToolResult execute_click(const ToolCall& call)            const;
+        ToolResult execute_type_text(const ToolCall& call)        const;
+        ToolResult execute_open_app(const ToolCall& call)         const;
+        ToolResult execute_close_app(const ToolCall& call)        const;
+        ToolResult execute_browser(const ToolCall& call)          const;
+        ToolResult execute_shell_run(const ToolCall& call)        const;
+        ToolResult execute_file_ops(const ToolCall& call)         const;
+        ToolResult execute_system_control(const ToolCall& call)   const;
+        ToolResult execute_email(const ToolCall& call)            const;
+        ToolResult execute_watch_screen(const ToolCall& call)     const;
+
+        // v1.5.0 — Scheduler tool
+        ToolResult execute_schedule_task(const ToolCall& call)    const;
+
         // run_python sandbox modes
         ToolResult run_python_subprocess(const std::string& code,
                                           int timeout_seconds) const;
@@ -143,6 +178,17 @@ namespace cardinal {
         VisionEncoder*         vision_encoder_ = nullptr;
         VisionCache*           vision_cache_   = nullptr;
         ConfirmationCallback   confirmation_cb_;
+
+        // v1.5.0 — Computer Use + Scheduler (set via setters in CardinalAPI::init)
+        ScreenReader*          screen_reader_      = nullptr;
+        InputController*       input_controller_   = nullptr;
+        AppController*         app_controller_     = nullptr;
+        BrowserController*     browser_controller_ = nullptr;
+        ShellExecutor*         shell_executor_     = nullptr;
+        FileManager*           file_manager_       = nullptr;
+        SystemController*      system_controller_  = nullptr;
+        EmailController*       email_controller_   = nullptr;
+        SchedulerEngine*       scheduler_          = nullptr;
 
         mutable std::mutex     exec_mutex_;
     };

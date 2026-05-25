@@ -1,20 +1,17 @@
-// SPDX-License-Identifier: AGPL-3.0-only
-// SPDX-FileCopyrightText: Copyright (C) 2026 Satwik Singh (Cardinal AGI)
 #pragma once
 // =============================================================================
-// Cardinal - API Facade (v1.4.0)
+// Cardinal - API Facade (v1.5.0)
 // File: src/api/cardinal_api.h
 //
-// Changes from v1.3.0:
-//   - SelfImprovementLoop owned here
-//   - on_inference post-hook calls loop_.on_inference()
-//   - on_session_boundary() calls loop_.on_session_boundary()
-//   - New API methods:
-//       get_self_model_status()  → SelfImprovementStatus
-//       reflect()                → ReflectionResult   (Layer 2 on-demand)
-//       trigger_training()       → bool               (Layer 3 on-demand)
-//   - CardinalStatus extended: TRAINING_FAILED = 13, SELF_MODEL_ERROR = 14
-//   - SystemStats extended with SelfImprovementStatus field
+// Changes from v1.4.0:
+//   - SchedulerEngine owned here
+//   - All computer use controllers owned here (DisplayDetector, ScreenReader,
+//     InputController, AppController, BrowserController, ShellExecutor,
+//     FileManager, SystemController, EmailController, AtSpiReader)
+//   - on_inference() calls scheduler_.on_inference() for idle tracking
+//   - New scheduler API methods (10 methods)
+//   - New computer use API methods (5 methods)
+//   - CardinalStatus extended: SCHEDULER_ERROR = 15, COMPUTER_USE_ERROR = 16
 // =============================================================================
 
 #include "utils/config_loader.h"
@@ -28,7 +25,9 @@
 #include "tools/tool_result.h"
 #include "agent/agent_types.h"
 #include "explainability/reasoning_trace.h"
-#include "self_model/self_model_types.h"   // SelfImprovementStatus, ReflectionResult
+#include "self_model/self_model_types.h"
+#include "scheduler/scheduler_types.h"
+#include "computer/computer_types.h"
 
 namespace cardinal {
     class RuleStore;
@@ -48,7 +47,18 @@ namespace cardinal {
     class AuditLog;
     class ExplainabilityExporter;
     class AgentExecutor;
-    class SelfImprovementLoop;      // ← new in v1.4.0
+    class SelfImprovementLoop;
+    class SchedulerEngine;          // ← new in v1.5.0
+    class DisplayDetector;          // ← new in v1.5.0
+    class ScreenReader;             // ← new in v1.5.0
+    class InputController;          // ← new in v1.5.0
+    class AppController;            // ← new in v1.5.0
+    class BrowserController;        // ← new in v1.5.0
+    class ShellExecutor;            // ← new in v1.5.0
+    class FileManager;              // ← new in v1.5.0
+    class SystemController;         // ← new in v1.5.0
+    class EmailController;          // ← new in v1.5.0
+    class AtSpiReader;              // ← new in v1.5.0
     struct Rule;
     struct EpisodeRecord;
     struct FeelingOutput;
@@ -62,6 +72,7 @@ namespace cardinal {
 #include <atomic>
 #include <functional>
 #include <chrono>
+#include <optional>
 
 namespace cardinal {
 
@@ -91,7 +102,7 @@ namespace cardinal {
         CardinalResult<std::vector<std::string>> list_sessions() const;
 
         // ------------------------------------------------------------------
-        // Inference (unchanged signature)
+        // Inference (unchanged)
         // ------------------------------------------------------------------
         CardinalResult<ChatResponse> chat(const std::string& session_id,
                                           const std::string& message);
@@ -100,21 +111,21 @@ namespace cardinal {
                                                   const ApiStreamCallback& stream_cb);
 
         // ------------------------------------------------------------------
-        // Agentic execution (unchanged from v1.2.0)
+        // Agentic execution (unchanged)
         // ------------------------------------------------------------------
         CardinalResult<ChatResponse> agent(const std::string& session_id,
                                            const std::string& goal,
                                            int                max_iterations = 0);
 
         // ------------------------------------------------------------------
-        // Tool management (unchanged from v1.2.0)
+        // Tool management (unchanged)
         // ------------------------------------------------------------------
         CardinalVoidResult register_tools(const std::vector<ToolDefinition>& tools);
         CardinalVoidResult unregister_tool(const std::string& name);
         CardinalResult<std::vector<ToolDefinition>> list_tools() const;
 
         // ------------------------------------------------------------------
-        // Explainability (unchanged from v1.2.0)
+        // Explainability (unchanged)
         // ------------------------------------------------------------------
         CardinalResult<std::string>  get_trace(const std::string& inference_id) const;
         CardinalResult<std::string>  export_trace(const std::string& inference_id) const;
@@ -142,27 +153,77 @@ namespace cardinal {
         CardinalResult<ExportInfo> export_dry_run(const ExportRequest& request) const;
 
         // ------------------------------------------------------------------
-        // Self-Improvement (new in v1.4.0)
+        // Self-Improvement (unchanged from v1.4.0)
+        // ------------------------------------------------------------------
+        CardinalResult<SelfImprovementStatus> get_self_model_status() const;
+        CardinalResult<ReflectionResult>      reflect();
+        CardinalResult<bool>                  trigger_training(
+                                                  const std::string& domain_hint = "");
+        void on_session_boundary();
+
+        // ------------------------------------------------------------------
+        // Scheduler (new in v1.5.0)
         // ------------------------------------------------------------------
 
-        // Returns the current state of all three self-improvement layers.
-        // Mapped to GET /self_model by the HTTP server.
-        CardinalResult<SelfImprovementStatus> get_self_model_status() const;
+        // Engine status
+        CardinalResult<SchedulerStatus>          get_scheduler_status() const;
 
-        // Trigger an on-demand Layer 2 reflection pass.
-        // Runs synchronously; may take several seconds.
-        // Mapped to POST /reflect by the HTTP server.
-        CardinalResult<ReflectionResult> reflect();
+        // Task CRUD
+        CardinalResult<std::vector<ScheduledTask>> list_tasks() const;
+        CardinalResult<ScheduledTask>              get_task(
+                                                       const std::string& task_id) const;
 
-        // Post a Layer 3 training request to the background thread.
-        // Returns immediately (training is async).
-        // domain_hint="" lets CurriculumBuilder decide the target domain.
-        // Mapped to POST /train by the HTTP server.
-        CardinalResult<bool> trigger_training(const std::string& domain_hint = "");
+        // Create from natural language (returns TaskParseResult so callers can
+        // relay clarification_needed back to the user)
+        CardinalResult<TaskParseResult>          create_task(
+                                                     const std::string& nl_description,
+                                                     const std::string& session_id = "");
 
-        // Called by the HTTP server / session manager between sessions.
-        // Applies any pending adapter approved by AdapterEvaluator.
-        void on_session_boundary();
+        // Create from a fully-formed ScheduledTask struct (HTTP API / direct)
+        CardinalResult<std::string>              create_task_direct(
+                                                     const ScheduledTask& task);
+
+        CardinalVoidResult                       update_task(const ScheduledTask& task);
+        CardinalVoidResult                       delete_task(const std::string& task_id);
+
+        // State transitions
+        CardinalVoidResult                       enable_task(const std::string& task_id);
+        CardinalVoidResult                       disable_task(const std::string& task_id);
+
+        // Immediate dispatch (returns run_id)
+        CardinalResult<std::string>              run_task_now(
+                                                     const std::string& task_id);
+
+        // History
+        CardinalResult<std::vector<TaskRun>>     get_task_history(
+                                                     const std::string& task_id,
+                                                     int                limit = 50) const;
+        CardinalResult<std::vector<TaskRun>>     get_recent_runs(int limit = 100) const;
+        CardinalResult<std::vector<TaskActionLog>> get_run_action_logs(
+                                                     const std::string& run_id) const;
+
+        // ------------------------------------------------------------------
+        // Computer Use (new in v1.5.0)
+        // ------------------------------------------------------------------
+
+        // Returns display server, screen resolution, tool availability
+        CardinalResult<ScreenInfo>      get_computer_status() const;
+
+        // Take a screenshot, optionally analyse with vision
+        CardinalResult<Screenshot>      take_screenshot(bool analyze = false,
+                                                        const std::string& prompt = "");
+
+        // Click by coordinate or visual description
+        CardinalResult<std::string>     computer_click(int x, int y,
+                                                       const std::string& description = "");
+
+        // Type text or send a key combo
+        CardinalResult<std::string>     computer_type(const std::string& text,
+                                                      const std::string& key = "");
+
+        // Run a shell command
+        CardinalResult<ShellResult>     computer_shell(const std::string& command,
+                                                       int timeout_seconds = 0);
 
         // ------------------------------------------------------------------
         // Settings (unchanged)
@@ -187,6 +248,8 @@ namespace cardinal {
         RuleInfo         to_rule_info(const Rule& r) const;
         EpisodeInfo      to_episode_info(const EpisodeRecord& ep) const;
         CardinalVoidResult check_initialized() const;
+        CardinalVoidResult check_scheduler() const;
+        CardinalVoidResult check_computer_use() const;
 
         // ------------------------------------------------------------------
         // Subsystem ownership
@@ -223,10 +286,23 @@ namespace cardinal {
         // Agent
         std::unique_ptr<AgentExecutor>         agent_executor_;
 
-        // Self-Improvement (new in v1.4.0)
-        // Owns Layers 1-3: SelfModel, MetaCognition, CurriculumBuilder,
-        // DatasetCurator, ITrainingBackend, AdapterEvaluator.
+        // Self-Improvement (v1.4.0)
         std::unique_ptr<SelfImprovementLoop>   self_improvement_;
+
+        // Scheduler (v1.5.0)
+        std::unique_ptr<SchedulerEngine>       scheduler_;
+
+        // Computer Use (v1.5.0)
+        std::unique_ptr<DisplayDetector>       display_detector_;
+        std::unique_ptr<ScreenReader>          screen_reader_;
+        std::unique_ptr<InputController>       input_controller_;
+        std::unique_ptr<AppController>         app_controller_;
+        std::unique_ptr<BrowserController>     browser_controller_;
+        std::unique_ptr<ShellExecutor>         shell_executor_;
+        std::unique_ptr<FileManager>           file_manager_;
+        std::unique_ptr<SystemController>      system_controller_;
+        std::unique_ptr<EmailController>       email_controller_;
+        std::unique_ptr<AtSpiReader>           atspi_reader_;
 
         // API layer
         std::unique_ptr<TrainingExporter>      training_exporter_;

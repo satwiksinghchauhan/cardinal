@@ -5,7 +5,7 @@
       "model_path": "models/Qwen_Qwen3.5-4B-Q4_K_M.gguf",
       "chat_template": "qwen3",
       "context_length": 8192,
-      "gpu_layers": 12,
+      "gpu_layers": 18,
       "threads": 8
     },
     "tensorrt": {
@@ -222,5 +222,83 @@
   "logging": {
     "level": "info",
     "path": "logs/cardinal.log"
+  },
+  "scheduler": {
+    "enabled": true,
+    "db_path": "data/scheduler/scheduler.db",
+    "check_interval_seconds": 30,
+    "max_concurrent_tasks": 1,
+    "idle_threshold_minutes": 5,
+    "task_session_prefix": "scheduler_",
+    "run_history_max_entries": 1000,
+    "max_task_duration_seconds": 300
+  },
+  "computer_use": {
+    "enabled": true,
+    "safety": {
+      "whitelist_enabled": true,
+      "allowed_apps": [
+        "google-chrome",
+        "firefox",
+        "nautilus",
+        "gnome-terminal",
+        "gedit",
+        "thunderbird"
+      ],
+      "allowed_domains": [],
+      "allowed_paths": [
+        "~/Documents",
+        "~/Downloads",
+        "~/Desktop",
+        "data/"
+      ],
+      "blocked_commands": [
+        "rm -rf /",
+        "rm -rf ~",
+        "mkfs",
+        "dd if=",
+        "sudo rm -rf",
+        ":(){:|:&};:",
+        "chmod 777 /"
+      ],
+      "confirmation_required": true,
+      "confirmation_timeout_seconds": 30,
+      "watch_mode": true,
+      "full_autonomy": false,
+      "allow_file_write": false
+    },
+    "screen": {
+      "screenshot_tool": "auto",
+      "vision_analysis": true,
+      "watch_interval_seconds": 2
+    },
+    "browser": {
+      "executable": "google-chrome",
+      "venv_path": "~/cardinal/cardinal-browser-venv",
+      "playwright_timeout_ms": 10000,
+      "headless": false,
+      "user_data_dir": "data/browser_profile"
+    },
+    "shell": {
+      "enabled": true,
+      "shell": "/bin/bash",
+      "timeout_seconds": 30,
+      "working_directory": "~"
+    },
+    "email": {
+      "enabled": false,
+      "mode": "imap_smtp",
+      "imap_host": "",
+      "imap_port": 993,
+      "smtp_host": "",
+      "smtp_port": 587,
+      "address": "",
+      "gmail_api_enabled": false,
+      "gmail_credentials_path": "data/gmail_credentials.json"
+    },
+    "atspi": {
+      "enabled": true,
+      "fallback_to_vision": true
+    }
   }
 }

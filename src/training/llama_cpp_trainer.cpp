@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: AGPL-3.0-only
-// SPDX-FileCopyrightText: Copyright (C) 2026 Satwik Singh (Cardinal AGI)
 // =============================================================================
 // Cardinal - LlamaCpp Training Backend — Implementation
 // File: src/training/llama_cpp_trainer.cpp

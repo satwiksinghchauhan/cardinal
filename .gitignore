@@ -4,6 +4,7 @@
 
 # Venv
 cardinal-train-venv/
+cardinal-browser-venv/
 
 # Build directories (CMake output)
 build/
@@ -70,6 +71,10 @@ pip-delete-this-directory.txt
 *.db-wal
 *.db-shm
 
+# Data directories
+data/**/*.*
+!data/**/.gitkeep
+
 # Logs
 logs/*.log
 *.log
@@ -77,10 +82,6 @@ logs/*.log
 # Training data (generated)
 data/training_export.jsonl
 data/*.jsonl
-
-# Episodic data (user conversations)
-data/memory/*.json
-!data/memory/*.template.json
 
 # Model files (too large, user provides)
 models/*

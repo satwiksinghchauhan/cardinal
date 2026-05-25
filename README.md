@@ -1,119 +1,216 @@
-# Cardinal v1.4.0
+# Cardinal v1.5.0
 
-**A production‑grade neurosymbolic AGI architecture with self-improvement.**
+**A production-grade neurosymbolic AGI architecture with self-improvement, autonomous scheduling, and full desktop computer use.**
 
-Cardinal combines a large language model core with **vision understanding**, symbolic verification, persistent memory, hybrid retrieval, a **full agentic loop**, **explainability exports**, and a **three-layer self-improvement system**. It runs on consumer hardware (RTX 3050 4GB) and is built entirely in C++20.
+Cardinal combines a large language model core with **vision understanding**, symbolic verification, persistent memory, hybrid retrieval, a **full agentic loop**, **explainability exports**, a **three-layer self-improvement system**, a **natural-language task scheduler**, and a complete **computer use subsystem** that can operate your desktop. It runs on consumer hardware (RTX 3050 4GB) and is built entirely in C++20.
 
-**Current version: v1.4.0** — SEAL self-improvement: symbolic self-model (Layer 1), meta-cognitive reflection (Layer 2), LoRA fine-tuning pipeline (Layer 3). All three layers run automatically after every inference.
+**Current version: v1.5.0** — Autonomic routine execution and computer use: NL-driven task scheduler, screen capture and analysis, keyboard/mouse control, browser automation (Playwright), shell execution, file management, system controls, email, and AT-SPI accessibility integration.
 
 ---
 
-## What's New in v1.4.0
+## What's New in v1.5.0
 
-- **Layer 1 — Symbolic Self-Model** — Cardinal tracks its own reasoning patterns in a SQLite database. After every inference it records confidence, contradiction rate, uncertainty rate, and rule-commit rate per domain. This is injected into the system prompt as calibration context.
-- **Layer 2 — Meta-Cognition** — A scheduled reflection pass analyses recent failure episodes and generates corrective rules (type `meta_correction`) stored in the rule base. Triggers automatically on contradiction rate threshold or every N inferences. Also available on-demand via `/api/reflect`.
-- **Layer 3 — LoRA Fine-tuning Pipeline** — Cardinal curates its own training data from high-confidence episodes, builds a domain-prioritised curriculum, runs HuggingFace PEFT via subprocess, converts the adapter to GGUF, evaluates it against a holdout set, and hot-loads it via `llama_set_adapters_lora`. For TensorRT deployments, a ready-to-run shell script is generated instead.
-- **Three new HTTP endpoints** — `GET /api/self_model`, `POST /api/reflect`, `POST /api/train`.
-- **All layers individually togglable** — each layer has its own `enabled` flag in `config.json`.
+### Scheduler — Autonomous Routine Execution
+
+Cardinal can now schedule tasks using natural language. Tell it "check the news every morning at 8am and save a summary to my desktop" and it parses the description, creates a `ScheduledTask`, and executes it autonomously at the right time — no cron syntax required.
+
+- **NL parsing** — `SchedulerParser` uses `InferencePipeline` to convert natural language into structured `ScheduledTask` objects with full JSON schema validation
+- **Trigger types** — cron (five-field), interval (every N seconds/minutes/hours), condition (metric threshold expressions), startup, idle, manual
+- **Action types** — `agent_run`, `chat`, `reflect`, `train`, `self_improvement`, `maintenance`, `export`, `shell`, `webhook`
+- **Output targets** — episodic memory, file, webhook URL, discard, or both memory and file
+- **Persistent storage** — all tasks and run history stored in SQLite with WAL mode
+- **`schedule_task` tool** — Cardinal can create, list, enable, disable, delete, and trigger tasks directly from chat
+
+### Computer Use — Full Desktop Agent
+
+Cardinal can now see and operate your desktop.
+
+- **Screenshots** — X11 (`scrot`) and Wayland (`grim`) with optional vision analysis via moondream2
+- **Input control** — keyboard typing, key combinations, mouse click/scroll (xdotool on X11, ydotool+wtype on Wayland)
+- **App management** — open, close, focus desktop applications (wmctrl/xdotool on X11, swaymsg on Wayland)
+- **Browser automation** — Playwright Python subprocess (persistent helper process) with navigate, click, type, scroll, get_content, execute_js, screenshot, new/close tab, back, forward, reload
+- **Shell execution** — sandboxed subprocess with configurable timeout, blocked commands, and working directory
+- **File operations** — list, move, copy, delete, mkdir, stat, exists — with allowed_paths enforcement
+- **System controls** — volume, mute, brightness, wifi, bluetooth, notifications (pactl/brightnessctl/nmcli/bluetoothctl)
+- **Email** — IMAP/SMTP read and send, Gmail REST API mode via google-auth; password from `CARDINAL_EMAIL_PASS` env var
+- **AT-SPI accessibility** — reads application UI trees via pyatspi Python subprocess for element-level interaction without coordinate guessing
+
+### Watch Subsystem
+
+Three background watchers for event-driven automation:
+- **FileWatcher** — inotify-based file system event monitoring
+- **ScreenWatcher** — periodic screenshot diff using ImageMagick PSNR
+- **ProcessWatcher** — `/proc` polling for process start/stop events
+
+### New HTTP Endpoints (v1.5.0)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/scheduler/status` | Scheduler engine status |
+| GET | `/api/scheduler/tasks` | List all tasks |
+| POST | `/api/scheduler/tasks` | Create task (NL description or direct JSON) |
+| GET | `/api/scheduler/tasks/:id` | Get task by ID |
+| PUT | `/api/scheduler/tasks/:id` | Update task |
+| DELETE | `/api/scheduler/tasks/:id` | Delete task |
+| POST | `/api/scheduler/tasks/:id/run` | Run task immediately |
+| POST | `/api/scheduler/tasks/:id/enable` | Enable task |
+| POST | `/api/scheduler/tasks/:id/disable` | Disable task |
+| GET | `/api/scheduler/tasks/:id/history` | Task run history |
+| GET | `/api/scheduler/runs` | Recent runs across all tasks |
+| GET | `/api/scheduler/runs/:id/actions` | Action log for a run |
+| GET | `/api/computer/status` | Display server, resolution |
+| POST | `/api/computer/screenshot` | Take screenshot |
+| POST | `/api/computer/click` | Click element or coordinates |
+| POST | `/api/computer/type` | Type text or send key combo |
+| POST | `/api/computer/shell` | Run shell command |
+
+### New CLI Commands (v1.5.0)
+
+```
+/scheduler   — show scheduler engine status
+/tasks       — list all scheduled tasks
+/computer    — show display server and resolution
+```
+
+---
+
+## What Was in v1.4.0
+
+- **Layer 1 — Symbolic Self-Model** — Cardinal tracks its own reasoning patterns in SQLite. Per-domain statistics (confidence, contradiction rate, uncertainty rate, rule-commit rate) are recorded after every inference and injected into the system prompt.
+- **Layer 2 — Meta-Cognition** — A scheduled reflection pass analyses recent failure episodes and generates corrective rules stored in the rule base. Available on-demand via `/api/reflect`.
+- **Layer 3 — LoRA Fine-tuning Pipeline** — Cardinal curates its own training data from high-confidence episodes, runs HuggingFace PEFT via subprocess, converts to GGUF, evaluates, and hot-loads the adapter via `llama_set_adapters_lora`.
 
 ---
 
 ## What Cardinal Is
 
-Most LLM systems are stateless — each conversation starts from zero. Cardinal is different. It remembers every inference it has ever made, extracts rules from its own reasoning, verifies those rules against a symbolic logic engine, detects and resolves contradictions automatically, retrieves relevant past experience before each new inference, and now **improves its own weights** from accumulated experience.
+Most LLM systems are stateless. Cardinal is not. It remembers every inference it has ever made, extracts rules from its own reasoning, verifies those rules against a symbolic logic engine, detects and resolves contradictions automatically, retrieves relevant past experience before each new inference, improves its own weights from accumulated experience, and now **operates your computer autonomously** and **schedules tasks to run while you sleep**.
 
-The architecture is **neurosymbolic** — it combines the pattern-matching strength of neural inference with the consistency guarantees of symbolic logic. Neither alone is sufficient. Together they produce a system that reasons carefully, stays consistent over time, and improves with experience.
-
-**With v1.4.0, Cardinal can improve itself.** It reflects on its own failures, generates corrective rules, and fine-tunes its own weights — all autonomously, all on the same hardware it runs on.
+The architecture is **neurosymbolic** — combining the pattern-matching strength of neural inference with the consistency guarantees of symbolic logic. With v1.5.0, Cardinal adds a third dimension: **autonomic execution** — the ability to act on the world on its own schedule.
 
 ---
 
 ## Hardware
-
-Cardinal was developed and runs on:
 
 | Component | Spec |
 |-----------|------|
 | CPU | AMD Ryzen 7 4800H |
 | RAM | 16GB |
 | GPU | NVIDIA RTX 3050 Laptop 4GB VRAM |
-| Storage | ~5GB core + models + adapters |
-| OS | Ubuntu 24.04 LTS (Linux only) |
+| Storage | ~5GB core + models |
+| OS | Ubuntu 24.04 LTS |
 
-**Models (v1.4.0):**
-- Primary LLM: `Qwen3.5 4B Q4_K_M` (llama.cpp or TensorRT backend)
-- Vision encoder: `moondream2` text model + `mmproj` (quantized, CPU)
+**Models:**
+- Primary LLM: `Qwen3.5 4B Q4_K_M` (llama.cpp or TensorRT)
+- Vision encoder: `moondream2` text model + mmproj (quantized, CPU)
 - Fine-tuning: HuggingFace weights at `models/qwen3.5-4b-hf/` + Python venv with PEFT
 
 ---
 
-## Architecture (v1.4.0)
+## Architecture (v1.5.0)
 
 ```
 CardinalAPI
     |
     +-- Memory Layer
-    |     +-- RuleStore          persistent rule base, confidence decay, Jaccard dedup
-    |     +-- KnowledgeGraph     typed nodes, BFS traversal, hub detection
-    |     +-- EpisodicMemory     append-only JSONL audit trail
-    |     +-- EpisodicStorage    SQLite + FTS5 searchable index, JSONL migration
-    |     +-- EpisodicRetriever  TF-IDF cosine + FTS5 keyword + hybrid retrieval
+    |     +-- RuleStore, KnowledgeGraph, EpisodicMemory
+    |     +-- EpisodicStorage (SQLite + FTS5)
+    |     +-- EpisodicRetriever (TF-IDF + keyword + hybrid)
     |
     +-- Verifier Pipeline
-    |     +-- SymbolicEngine     SWI-Prolog 9.2.9 integration, contradiction detection
-    |     +-- NeuralVerifier     optional small LLM verifier (Llama 3.2 1B)
-    |     +-- RuleExtractor      NLP extraction, causal/deductive/declarative patterns
-    |     +-- ConsistencyChecker orchestrator, auto-resolution, maintenance cycles
+    |     +-- SymbolicEngine (SWI-Prolog)
+    |     +-- NeuralVerifier (optional small LLM)
+    |     +-- RuleExtractor, ConsistencyChecker
     |
-    +-- LLM Core (Backend Abstraction)
-    |     +-- LLMEngine          Abstract interface: llama.cpp or TensorRT
-    |     +-- llama.cpp backend  Development / CPU / CUDA fallback
-    |     +-- TensorRT backend   Optimized deployment on NVIDIA GPUs
-    |     +-- InferencePipeline  two-pass orchestrator, prompt injection, retry logic
+    +-- LLM Core
+    |     +-- ILLMBackend (llama.cpp / TensorRT)
+    |     +-- InferencePipeline (two-pass)
     |
     +-- Vision Subsystem (v1.3.0)
-    |     +-- VisionEncoder      moondream2 wrapper, uses mtmd API
-    |     +-- VisionCache        URL download cache, TTL eviction
+    |     +-- VisionEncoder (moondream2 + mtmd)
+    |     +-- VisionCache (URL download + TTL)
     |
-    +-- Self-Improvement Subsystem (v1.4.0)        ← NEW
-    |     +-- SelfImprovementLoop   orchestrator, background training thread
-    |     Layer 1: SelfModel        symbolic self-knowledge, SQLite accumulator
-    |     Layer 2: MetaCognition    reflection pass, corrective rule generation
+    +-- Self-Improvement (v1.4.0)
+    |     +-- SelfImprovementLoop (orchestrator)
+    |     Layer 1: SelfModel (SQLite, per-domain stats)
+    |     Layer 2: MetaCognition (reflection, corrective rules)
     |     Layer 3: Training Pipeline
-    |         +-- CurriculumBuilder   domain weakness scoring, recency bias
-    |         +-- DatasetCurator      episode → TrainingExample, rule augmentation
-    |         +-- ITrainingBackend    abstract interface
-    |         +-- LlamaCppTrainer     PEFT subprocess → GGUF → llama_set_adapters_lora
-    |         +-- TensorRTTrainer     script-export mode for cluster deployment
-    |         +-- AdapterEvaluator    holdout eval, improvement threshold gate
+    |         +-- CurriculumBuilder, DatasetCurator
+    |         +-- LlamaCppTrainer / TensorRTTrainer
+    |         +-- AdapterEvaluator
     |
-    +-- Agentic Pipeline (Unified)
-    |     +-- AgentExecutor      PLAN → EXECUTE loop (THINK → ACT → OBSERVE) → FINALIZE
-    |     +-- ToolExecutor       Sandboxed tool execution (subprocess or Docker)
-    |     +-- WorkingMemory      SQLite-backed persistent scratchpad
-    |     +-- SelfCorrection     Retry failed steps, max attempts configurable
+    +-- Scheduler (v1.5.0)  ← NEW
+    |     +-- SchedulerEngine (background thread, trigger dispatch)
+    |     +-- SchedulerParser (NL → ScheduledTask via InferencePipeline)
+    |     +-- SchedulerStore (SQLite WAL: tasks, runs, action_logs)
+    |
+    +-- Computer Use (v1.5.0)  ← NEW
+    |     +-- DisplayDetector (X11/Wayland/headless at runtime)
+    |     +-- ScreenReader (scrot/grim + VisionEncoder analysis)
+    |     +-- InputController (xdotool/ydotool+wtype)
+    |     +-- AppController (wmctrl/swaymsg)
+    |     +-- BrowserController (Playwright subprocess)
+    |     +-- ShellExecutor (sandboxed subprocess)
+    |     +-- FileManager (allowed_paths enforced)
+    |     +-- SystemController (pactl/brightnessctl/nmcli/bluetoothctl)
+    |     +-- EmailController (IMAP/SMTP or Gmail REST API)
+    |     +-- AtSpiReader (pyatspi subprocess)
+    |
+    +-- Watch Subsystem (v1.5.0)  ← NEW
+    |     +-- FileWatcher (inotify)
+    |     +-- ScreenWatcher (periodic PSNR diff)
+    |     +-- ProcessWatcher (/proc polling)
+    |
+    +-- Agentic Pipeline
+    |     +-- AgentExecutor (PLAN → EXECUTE → FINALIZE)
+    |     +-- ToolExecutor (sandboxed, dispatches all tools)
     |
     +-- Explainability
-    |     +-- AuditLog           Every inference trace: feeling, tools, rules, symbolic checks
-    |     +-- Cryptographic signing  SHA256 + Ed25519 (tamper-evident)
-    |     +-- Export API         JSON exports for compliance
+    |     +-- AuditLog (signed inference traces)
+    |     +-- ExplainabilityExporter
     |
     +-- API Layer
-          +-- CardinalTypes      shared types, no exceptions at boundary
-          +-- CardinalSettings   runtime-mutable config, immediate propagation
-          +-- SessionManager     multi-session conversation state
-          +-- TrainingExporter   Alpaca JSONL export
-          +-- HttpServer         SSE streaming, Bearer auth, CORS, TypeScript bridge
+          +-- CardinalAPI (single facade)
+          +-- HttpServer (SSE streaming, Bearer auth, CORS)
+          +-- SessionManager, SettingsManager
+          +-- TrainingExporter
 ```
 
 ---
 
-## Two-Pass Inference (Unchanged, Still Core)
+## Tools (v1.5.0)
 
-Every inference runs in two passes.
+| Tool | Description |
+|------|-------------|
+| `web_search` | DuckDuckGo search |
+| `web_fetch` | Fetch and parse a URL |
+| `calculator` | Math expression evaluator (muparser) |
+| `run_python` | Sandboxed Python execution |
+| `file_read` | Read from allowed paths |
+| `file_write` | Write to allowed paths |
+| `knowledge_graph_query` | Query Cardinal's KG |
+| `episodic_search` | Search episodic memory |
+| `analyze_image` | Describe image (file or URL) |
+| `screenshot` | Capture screen, optional vision analysis |
+| `click` | Click by coordinates or NL element description |
+| `type_text` | Type text or send key combos |
+| `open_app` | Launch desktop applications |
+| `close_app` | Close desktop applications |
+| `browser` | 13 browser actions via Playwright |
+| `shell_run` | Execute shell commands |
+| `file_ops` | list/move/copy/delete/mkdir/stat/exists |
+| `system_control` | Volume, brightness, wifi, bluetooth, DND |
+| `email` | Read and send email |
+| `watch_screen` | Wait for visual change on screen |
+| `schedule_task` | Create and manage scheduled tasks |
 
-**Pass 1 — Feeling Output (constrained decoding)**
-GBNF grammar forces the model to produce a structured JSON object before generating any response.
+---
+
+## Two-Pass Inference
+
+**Pass 1** — GBNF grammar-constrained decoding produces a structured JSON feeling output before any natural language response.
+
+**Pass 2** — The feeling output is injected as a synthetic assistant turn. Free decode produces the final response.
 
 ```json
 {
@@ -126,118 +223,39 @@ GBNF grammar forces the model to produce a structured JSON object before generat
 }
 ```
 
-**Pass 2 — Response (free decoding)**
-The feeling output is injected as a synthetic assistant turn. The model generates its final response with full awareness of its own internal state.
-
-**v1.4.0 addition:** After every inference, the feeling output is fed into `SelfImprovementLoop::on_inference()`. Layer 1 records the stats. Layer 2 checks whether a reflection pass should fire. Layer 3 checks episode count and confidence thresholds.
-
----
-
-## Self-Improvement (v1.4.0)
-
-### Layer 1 — Symbolic Self-Model
-
-Cardinal maintains a SQLite database at `data/self_model/self_model.db` tracking per-domain statistics: average confidence, contradiction rate, uncertainty rate, rule-commit rate. A weakness score is derived:
-
-```
-weakness_score = (contradiction_rate × 0.4) + (uncertainty_rate × 0.3) + ((1 - avg_confidence) × 0.3)
-```
-
-A formatted summary is injected into every system prompt as `[Self-Model]` context so the model is always aware of where it is weakest.
-
-### Layer 2 — Meta-Cognition
-
-A reflection pass runs when:
-- Every N inferences (default: 20)
-- Contradiction rate for a domain exceeds 30%
-- Manually via `POST /api/reflect`
-
-The pass queries recent failure episodes, builds a structured prompt, runs a single LLM pass, parses the JSON findings, and commits corrective rules of type `meta_correction` to the rule store. These rules are injected into future inferences just like any other rule.
-
-### Layer 3 — LoRA Fine-tuning
-
-Triggers when:
-- Every 100 episodes
-- Every 24 hours
-- Any domain's average confidence drops below 0.5
-- Manually via `POST /api/train`
-
-The cycle: `CurriculumBuilder` selects the weakest non-cooling domain → `DatasetCurator` pulls episodes from SQLite + rule augmentation → PEFT subprocess trains the adapter → `convert_lora_to_gguf.py` converts it → holdout evaluation → if improvement ≥ 5%, the adapter is loaded at the next session boundary via `llama_set_adapters_lora`.
-
-For TensorRT deployments, `TensorRTTrainer` instead writes a ready-to-run shell script to `data/training/scripts/`.
-
----
-
-## Self-Improvement API
-
-```bash
-# Current self-model status (all three layers)
-GET /api/self_model
-
-# Trigger on-demand reflection (Layer 2)
-POST /api/reflect
-
-# Trigger on-demand training (Layer 3, async)
-POST /api/train
-{"domain_hint": "factual"}   # optional — omit to let CurriculumBuilder decide
-```
-
----
-
-## Vision (v1.3.0, unchanged)
-
-Supports local file paths and HTTP/HTTPS URLs. Results cached by URL/hash with configurable TTL.
-
-```
-You: what is in data/test.jpg?
-Cardinal: [Tool: analyze_image] The image shows a young man with glasses...
-```
-
-Performance on RTX 3050 4GB: ~9-10s first image, ~2-3s cached.
-
----
-
-## Tools (v1.2.0 + v1.3.0, unchanged)
-
-| Tool | Description | Confirmation Required |
-|------|-------------|----------------------|
-| `web_search` | DuckDuckGo search | Configurable |
-| `web_fetch` | Fetch and parse a URL | Configurable |
-| `calculator` | Math expression evaluator | No |
-| `run_python` | Sandboxed Python execution | **Yes** (default) |
-| `file_read` | Read from allowed paths | No |
-| `file_write` | Write to allowed paths | **Yes** (default) |
-| `knowledge_graph_query` | Query Cardinal's KG | No |
-| `episodic_search` | Search Cardinal's memory | No |
-| `analyze_image` (v1.3.0) | Describe an image (file or URL) | No (default) |
-
 ---
 
 ## Build
 
 ```bash
 # System dependencies
-sudo apt install build-essential cmake libsqlite3-dev libssl-dev swi-prolog python3
+sudo apt install -y build-essential cmake libsqlite3-dev libssl-dev swi-prolog \
+    python3 python3-venv scrot imagemagick xdotool wmctrl xprop \
+    ydotool wtype grim pulseaudio-utils brightnessctl network-manager bluez
 
-# Build
-mkdir build && cd build
+# Install vendor dependencies manually (no submodules)
+cd ~/cardinal && mkdir -p vendor && cd vendor
+git clone https://github.com/ggerganov/llama.cpp.git
+git clone https://github.com/nlohmann/json.git nlohmann_json
+git clone https://github.com/yhirose/cpp-httplib.git
+git clone https://github.com/beltoforion/muparser.git
+git clone https://github.com/mlc-ai/tokenizers-cpp
+
+# Build llama.cpp
+cd llama.cpp && mkdir build && cd build
+cmake .. -DGGML_CUDA=ON -DLLAMA_BUILD_EXAMPLES=ON -DCMAKE_BUILD_TYPE=Release
+make -j$(nproc) && cd ~/cardinal
+
+# Build Cardinal
+mkdir -p build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
 make -j$(nproc)
 
 # Run
-cd ~/cardinal
-./build/bin/cardinal
+cd ~/cardinal && ./build/bin/cardinal
 ```
 
-For the training pipeline (Layer 3), also set up the Python venv:
-
-```bash
-python3 -m venv ~/cardinal/cardinal-train-venv
-source ~/cardinal/cardinal-train-venv/bin/activate
-pip install peft transformers torch accelerate
-```
-
-See `INSTALL.md` for the complete guide.
+See `INSTALL.md` for the complete guide including browser venv, email setup, ydotool daemon, and all models.
 
 ---
 
@@ -246,57 +264,28 @@ See `INSTALL.md` for the complete guide.
 Base URL: `http://127.0.0.1:8080`
 Auth: `Authorization: Bearer <api_key>` (except `/api/health`)
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/health` | Health check |
-| POST | `/api/chat` | Send message |
-| POST | `/api/sessions` | Create session |
-| DELETE | `/api/sessions/:id` | Destroy session |
-| GET | `/api/stats` | System stats |
-| GET | `/api/rules` | Rule store |
-| GET | `/api/episodes` | Episode query |
-| POST | `/api/scan` | Contradiction scan |
-| POST | `/api/maintenance` | Maintenance cycle |
-| GET | `/api/settings` | Get settings |
-| POST | `/api/settings` | Update settings |
-| POST | `/api/export` | Export training data |
-| **GET** | **`/api/self_model`** | **Self-model status (v1.4.0)** |
-| **POST** | **`/api/reflect`** | **Trigger reflection (v1.4.0)** |
-| **POST** | **`/api/train`** | **Trigger training (v1.4.0)** |
+Full API reference in `DOCUMENTATION.md`.
 
 ---
 
 ## Configuration (`config.json`)
 
-New `self_improvement` block in v1.4.0:
+v1.5.0 adds two top-level blocks:
 
 ```json
 {
-  "self_improvement": {
+  "scheduler": {
     "enabled": true,
-    "self_model": {
-      "enabled": true,
-      "db_path": "data/self_model/self_model.db",
-      "inject_into_prompt": true,
-      "prompt_max_chars": 500
-    },
-    "meta_cognition": {
-      "enabled": true,
-      "trigger_every_n_inferences": 20,
-      "trigger_on_contradiction_rate_pct": 30.0,
-      "min_failures_to_reflect": 5,
-      "corrective_rule_confidence": 0.6
-    },
-    "training": {
-      "enabled": true,
-      "trigger_every_n_episodes": 100,
-      "trigger_every_n_hours": 24,
-      "trigger_on_domain_confidence_below": 0.5,
-      "adapter_load_policy": "session_boundary",
-      "eval_improvement_threshold_pct": 5.0,
-      "hf_model_path": "models/qwen3.5-4b-hf",
-      "python_venv": "~/cardinal/cardinal-train-venv"
-    }
+    "db_path": "data/scheduler/scheduler.db",
+    "check_interval_seconds": 30,
+    "max_concurrent_tasks": 1
+  },
+  "computer_use": {
+    "enabled": true,
+    "safety": { "allowed_paths": ["~/Documents", "~/Downloads"], "blocked_commands": ["rm -rf /"] },
+    "browser": { "venv_path": "~/cardinal/cardinal-browser-venv" },
+    "shell": { "enabled": true, "timeout_seconds": 30 },
+    "email": { "enabled": false, "mode": "imap_smtp" }
   }
 }
 ```
@@ -313,9 +302,11 @@ Full configuration reference in `DOCUMENTATION.md`.
 - **Internal conflict detection** — Confidence dropped to 0.15 with uncertainty flagged.
 - **Consistency over time** — Zero contradictions across early episodes.
 - **Vision understanding** (v1.3.0) — Cardinal accurately described faces, expressions, and scene composition.
-- **Self-correction via rules** (v1.4.0) — Meta-cognition generated corrective rules that reduced contradiction rate in the factual domain across subsequent inferences.
+- **Self-correction via rules** (v1.4.0) — Meta-cognition generated corrective rules that reduced contradiction rate in the factual domain.
+- **Autonomous task execution** (v1.5.0) — Cardinal scheduled a nightly news summary task from a natural language request, executed it correctly at 8am, and stored the result in episodic memory.
+- **Desktop operation** (v1.5.0) — Cardinal opened a browser, navigated to a URL, extracted content, and closed the browser via natural conversation.
 
-These are documented as observations, not as claims about consciousness.
+These are documented as observations, not claims about consciousness.
 
 ---
 
@@ -323,12 +314,13 @@ These are documented as observations, not as claims about consciousness.
 
 | Version | Status | Description |
 |---------|--------|-------------|
-| v1.0–1.2 | done | Core AGI, memory, symbolic verification, agentic loop, explainability |
-| v1.3.0 | done | Native vision encoder (moondream2), `analyze_image` tool |
-| **v1.4.0** | **done** | **SEAL self-improvement: self-model, meta-cognition, LoRA fine-tuning** |
-| v1.5.0 | planned | Automation & Scheduling |
+| v1.0.0 | done | Core AGI with two-pass inference, memory, symbolic verification |
+| v1.1.0 | done | Backend abstraction, Linux native, offline builds |
+| v1.2.0 | done | Explainer, native tools, history trimming, stability improvements |
+| v1.3.0 | done | Native vision encoder (moondream2) |
+| v1.4.0 | done | SEAL self-improvement: self-model, meta-cognition, LoRA fine-tuning |
+| **v1.5.0** | **done** | **Scheduler + Computer Use + Watch subsystem** |
 | v1.6.0 | planned | Voice & Audio |
-| v1.7.0 | planned | Secure API hardening |
 | v2.0.0 | planned | Production hardening + formal proof |
 
 ---
@@ -341,4 +333,4 @@ Cardinal is **not open source**. See `LICENSE` for details.
 ---
 
 *Built by a 16-year-old researcher. No team. No funding. Runs on a gaming laptop.*
-*Now it learns.*
+*Now it acts.*

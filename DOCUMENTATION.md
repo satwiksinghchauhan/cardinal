@@ -1,11 +1,12 @@
-# Cardinal v1.4.0 — Technical Documentation
+# Cardinal v1.5.0 — Technical Documentation
 
-**Architecture:** Neurosymbolic AGI Core + Agentic Loop + Explainability + Vision + Self-Improvement
+**Architecture:** Neurosymbolic AGI Core + Agentic Loop + Explainability + Vision + Self-Improvement + Scheduler + Computer Use + Watch
 **Language:** C++20
 **Platform:** Linux (Ubuntu 24.04 LTS)
 **GPU:** NVIDIA CUDA (TensorRT / llama.cpp)
 **Vision:** moondream2 via `llama.cpp` `mtmd` subsystem
 **Self-Improvement:** Three-layer SEAL system (self-model, meta-cognition, LoRA fine-tuning)
+**v1.5.0 additions:** Natural-language scheduler, full desktop computer use, watch subsystem
 
 ---
 
@@ -21,189 +22,163 @@
 8. [Backend Abstraction](#8-backend-abstraction)
 9. [Vision Subsystem (v1.3.0)](#9-vision-subsystem-v130)
 10. [Self-Improvement Subsystem (v1.4.0)](#10-self-improvement-subsystem-v140)
-11. [Agentic Pipeline (Unified)](#11-agentic-pipeline-unified)
-12. [Tools System](#12-tools-system)
-13. [Explainability Exports](#13-explainability-exports)
-14. [Training Export](#14-training-export)
-15. [Configuration Reference](#15-configuration-reference)
-16. [CardinalAPI Reference](#16-cardinalapi-reference)
-17. [HTTP API Reference](#17-http-api-reference)
-18. [Settings Manager](#18-settings-manager)
-19. [Session Manager](#19-session-manager)
-20. [Type Reference](#20-type-reference)
-21. [Error Handling](#21-error-handling)
-22. [Offline Builds & Vendoring](#22-offline-builds--vendoring)
-23. [Module Reference](#23-module-reference)
-24. [Threading Model](#24-threading-model)
-25. [Lifecycle and Startup Sequence](#25-lifecycle-and-startup-sequence)
+11. [Scheduler Subsystem (v1.5.0)](#11-scheduler-subsystem-v150)
+12. [Computer Use Subsystem (v1.5.0)](#12-computer-use-subsystem-v150)
+13. [Watch Subsystem (v1.5.0)](#13-watch-subsystem-v150)
+14. [Agentic Pipeline](#14-agentic-pipeline)
+15. [Tools System](#15-tools-system)
+16. [Explainability Exports](#16-explainability-exports)
+17. [Training Export](#17-training-export)
+18. [Configuration Reference](#18-configuration-reference)
+19. [CardinalAPI Reference](#19-cardinalapi-reference)
+20. [HTTP API Reference](#20-http-api-reference)
+21. [Settings Manager](#21-settings-manager)
+22. [Session Manager](#22-session-manager)
+23. [Type Reference](#23-type-reference)
+24. [Error Handling](#24-error-handling)
+25. [Offline Builds & Vendoring](#25-offline-builds--vendoring)
+26. [Module Reference](#26-module-reference)
+27. [Threading Model](#27-threading-model)
+28. [Lifecycle and Startup Sequence](#28-lifecycle-and-startup-sequence)
 
 ---
 
 ## 1. Architecture Overview
 
-Cardinal is structured in four layers. Each layer depends only on the layers below it. No layer reaches upward.
+Cardinal is structured in four layers. Each layer depends only on the layers below it.
 
 ```
-Layer 4 -- Interfaces
-    Interface 1: Chat (C++)
-    Interface 2: Agent (TypeScript via HTTP)
-    Interface 3: SEAL (Python via pybind11)
+Layer 4 — Interfaces
+    CLI (interactive loop, /commands)
+    HTTP API (SSE streaming, Bearer auth)
 
-Layer 3 -- API Layer
-    CardinalAPI        single facade, owns all components
-    HttpServer         TypeScript bridge, SSE streaming
-    SettingsManager    runtime-mutable config
-    SessionManager     multi-session conversation state
-    TrainingExporter   Alpaca JSONL export
-    Explainability     audit log, cryptographic signing, export API
+Layer 3 — API Layer
+    CardinalAPI         single facade, owns all components
+    HttpServer          SSE streaming, Bearer auth, CORS
+    SettingsManager     runtime-mutable config
+    SessionManager      multi-session conversation state
+    TrainingExporter    Alpaca JSONL export
+    Explainability      audit log, cryptographic signing
 
-Layer 2 -- Core Systems
-    InferencePipeline  two-pass orchestrator, prompt injection
-    AgentExecutor      PLAN → EXECUTE loop
-    ToolExecutor       sandboxed tool execution
-    LLMEngine          abstract backend (llama.cpp / TensorRT)
-    ConsistencyChecker verifier orchestrator, auto-resolution
-    SymbolicEngine     SWI-Prolog integration
-    NeuralVerifier     optional small LLM verifier
-    RuleExtractor      NLP rule extraction
+Layer 2 — Core Systems
+    InferencePipeline   two-pass orchestrator, prompt injection
+    AgentExecutor       PLAN → EXECUTE loop
+    ToolExecutor        sandboxed tool execution (all tools including computer use)
+    ILLMBackend         abstract backend (llama.cpp / TensorRT)
+    ConsistencyChecker  verifier orchestrator
+    SymbolicEngine      SWI-Prolog integration
+    SchedulerEngine     background thread, NL parsing, task dispatch  ← v1.5.0
+    Computer Use Layer  display, input, browser, shell, file, email   ← v1.5.0
+    Watch Subsystem     file, screen, process watchers                ← v1.5.0
 
-Layer 1 -- Foundation
-    RuleStore          persistent rule base
-    KnowledgeGraph     typed node graph
-    EpisodicMemory     JSONL audit trail
-    EpisodicStorage    SQLite + FTS5 searchable index
-    EpisodicRetriever  TF-IDF + keyword + hybrid retrieval
-    ConfigLoader       typed config, validated at startup
-    Logger             thread-safe, 6 levels
-    JsonParser         serialization utilities
-
-Layer 1.5 -- Vision Subsystem (v1.3.0)
-    VisionCache        URL download cache, TTL eviction
-    VisionEncoder      moondream2 wrapper via mtmd API
-
-Layer 1.6 -- Self-Improvement Subsystem (v1.4.0)      ← NEW
-    SelfModel          symbolic self-knowledge (SQLite accumulator)
-    MetaCognition      reflection pass, corrective rule generation
-    CurriculumBuilder  domain weakness scoring, training plan
-    DatasetCurator     episode → TrainingExample, rule augmentation
-    ITrainingBackend   abstract training interface
-    LlamaCppTrainer    PEFT subprocess → GGUF → adapter hot-load
-    TensorRTTrainer    script-export mode for cluster deployment
-    AdapterEvaluator   holdout evaluation, improvement threshold gate
-    SelfImprovementLoop  orchestrator, background training thread
+Layer 1 — Foundation
+    RuleStore           persistent rule base
+    KnowledgeGraph      typed node graph
+    EpisodicMemory      JSONL audit trail
+    EpisodicStorage     SQLite + FTS5 searchable index
+    EpisodicRetriever   TF-IDF + keyword + hybrid retrieval
+    VisionEncoder       moondream2 via mtmd API                       ← v1.3.0
+    VisionCache         URL download cache, TTL eviction              ← v1.3.0
+    SelfImprovementLoop SEAL orchestrator                             ← v1.4.0
+    SelfModel           per-domain statistics SQLite                  ← v1.4.0
+    MetaCognition       reflection, corrective rules                  ← v1.4.0
+    Training Pipeline   CurriculumBuilder, DatasetCurator, trainers  ← v1.4.0
+    SchedulerStore      SQLite WAL: tasks, runs, action_logs          ← v1.5.0
+    ConfigLoader        typed config, validated at startup
+    Logger              thread-safe, 6 levels
 ```
 
 ### Component Ownership
 
-`CardinalAPI` owns every component via `std::unique_ptr`. Components are constructed in `init()` and destroyed in `shutdown()`. No component is accessible from outside the API boundary — callers see only the types defined in `cardinal_types.h`.
+`CardinalAPI` owns every component via `std::unique_ptr`. Components are constructed in `init()` and destroyed in `shutdown()`. No component is accessible from outside the API boundary — callers see only types defined in `cardinal_types.h`.
 
-### Dependency Graph (v1.4.0)
+### Dependency Graph (v1.5.0)
 
 ```
 CardinalAPI
-    owns --> LLMEngine
-    owns --> InferencePipeline --> LLMEngine
+    owns --> ILLMBackend
+    owns --> InferencePipeline --> ILLMBackend
                                --> EpisodicRetriever
     owns --> AgentExecutor --> InferencePipeline
                            --> ToolExecutor
-    owns --> ToolExecutor
-    owns --> RuleStore
-    owns --> KnowledgeGraph
-    owns --> EpisodicMemory
-    owns --> EpisodicStorage
+    owns --> ToolExecutor --> [all controllers below via setters]
+    owns --> RuleStore, KnowledgeGraph, EpisodicMemory, EpisodicStorage
     owns --> EpisodicRetriever --> EpisodicStorage
-    owns --> SymbolicEngine
-    owns --> NeuralVerifier
-    owns --> RuleExtractor --> RuleStore
-                           --> SymbolicEngine
-    owns --> ConsistencyChecker --> RuleStore
-                                --> EpisodicMemory
-                                --> SymbolicEngine
-                                --> RuleExtractor
-                                --> NeuralVerifier
-    owns --> VisionCache (v1.3.0)
-    owns --> VisionEncoder (v1.3.0) --> mtmd library
-    owns --> SelfImprovementLoop (v1.4.0)
-                --> SelfModel        --> SQLite (self_model.db)
-                --> MetaCognition    --> EpisodicStorage
-                                    --> RuleStore
-                                    --> SelfModel
-                                    --> LLMEngine
-                --> CurriculumBuilder --> SelfModel
-                --> DatasetCurator  --> EpisodicStorage
-                                    --> RuleStore
-                --> ITrainingBackend (LlamaCppTrainer | TensorRTTrainer)
-                                    --> LLMEngine (adapter hot-load)
-                --> AdapterEvaluator --> ITrainingBackend
-    owns --> TrainingExporter --> EpisodicStorage
-                              --> RuleStore
-    owns --> SettingsManager --> EpisodicRetriever
-                             --> InferencePipeline
-                             --> AgentExecutor
-    owns --> SessionManager
-    owns --> HttpServer (separate, explicit start)
+    owns --> SymbolicEngine, NeuralVerifier, RuleExtractor, ConsistencyChecker
+    owns --> VisionCache, VisionEncoder --> mtmd library
+    owns --> SelfImprovementLoop
+                --> SelfModel, MetaCognition
+                --> CurriculumBuilder, DatasetCurator
+                --> ITrainingBackend, AdapterEvaluator
+    owns --> SchedulerEngine (v1.5.0)
+                --> SchedulerStore  --> scheduler.db
+                --> SchedulerParser --> InferencePipeline
+                --> AgentExecutor, SelfImprovementLoop, EpisodicStorage
+    owns --> DisplayDetector (v1.5.0)
+    owns --> ScreenReader    --> DisplayDetector, VisionEncoder
+    owns --> InputController --> DisplayDetector
+    owns --> AppController   --> DisplayDetector
+    owns --> BrowserController --> VisionEncoder
+    owns --> ShellExecutor
+    owns --> FileManager
+    owns --> SystemController
+    owns --> EmailController
+    owns --> AtSpiReader
+    owns --> FileWatcher, ScreenWatcher, ProcessWatcher (v1.5.0)
+    owns --> AuditLog, ExplainabilityExporter
+    owns --> TrainingExporter, SettingsManager, SessionManager
+    owns --> HttpServer
 ```
 
 ---
 
 ## 2. Two-Pass Inference
 
-Every inference Cardinal performs consists of exactly two passes through the language model. The two passes use separate inference contexts to prevent grammar state contamination.
+Every inference Cardinal performs consists of exactly two passes through the language model using separate inference contexts to prevent grammar state contamination.
 
 ### Pass 1 — Constrained Decoding (Feeling Output)
 
-GBNF grammar-constrained decoding forces the model to produce a structured JSON object before generating any natural language response. The grammar is defined in `src/prompts/feeling_schema.gbnf`.
-
-The feeling output captures six fields:
-- `confidence` — how confident the model is (0.0–1.0)
-- `reasoning_type` — causal/deductive/inductive/abductive/analogical/associative
-- `reasoning_domain` — factual/ethical/spatial/temporal/social/mathematical
-- `uncertainty_flag` — whether the model is uncertain
-- `contradiction_flag` — whether the model detects a conflict
-- `rule_candidate_signal` — whether a rule might be extractable
+GBNF grammar-constrained decoding forces the model to produce a structured JSON object before any natural language. The grammar is in `src/prompts/feeling_schema.gbnf`.
 
 ### Synthetic Turn Injection
 
-After Pass 1, the feeling JSON is injected as a synthetic assistant turn. The model reads its own feeling output as something it already said, not as an instruction from outside.
+The feeling JSON is injected as a synthetic assistant turn — the model reads its own feeling as something it already said, not an instruction.
 
 ### Pass 2 — Free Decoding (Final Response)
 
-No grammar constraint. The model generates its final response. The stream callback is called per token.
+No grammar constraint. Streaming callback fires per token.
 
 ### v1.4.0 Addition — Self-Improvement Hook
 
-After Pass 2 completes and the episode is committed, `SelfImprovementLoop::on_inference()` is called with the feeling output fields. This is where all three layers receive their data:
-- Layer 1 writes a SQLite UPSERT to `domain_stats` and `reasoning_stats`.
-- Layer 2 checks whether the inference counter or contradiction rate threshold has been crossed.
-- Layer 3 checks the episode counter and domain confidence thresholds.
+After every `run_post_inference()`, `SelfImprovementLoop::on_inference()` is called with feeling output fields:
+- Layer 1: O(1) SQLite upsert to `domain_stats` and `reasoning_stats`
+- Layer 2: checks inference counter and contradiction rate thresholds
+- Layer 3: checks episode counter and domain confidence thresholds
 
-The hook is synchronous and lock-free for the common case (no trigger fires).
+### v1.5.0 Addition — Scheduler Hook
+
+After every inference, `SchedulerEngine::on_inference()` updates the idle tracker timestamp. This allows idle-triggered tasks to measure actual idle time since the last inference.
 
 ### Prompt Injection (v1.4.0)
 
-If `self_improvement.self_model.inject_into_prompt=true`, a `[Self-Model]` block is prepended to the system prompt on every inference. Example:
+If `inject_into_prompt=true`, a `[Self-Model]` block is prepended:
 
 ```
 [Self-Model]
 Weakest domain:   factual
 Strongest domain: mathematical
 Domain          Conf  Contradict  Uncertain  Inferences
-factual         0.71      0.12       0.08          142
-mathematical    0.93      0.01       0.02           38
-ethical         0.84      0.04       0.05           27
-Top reasoning: deductive(89) causal(63) inductive(41)
+factual         0.71      0.12       0.08         142
+mathematical    0.93      0.01       0.02          38
 ```
-
-This gives the model calibrated self-awareness of where it is weakest, which measurably improves confidence output quality in those domains.
 
 ### Retry Logic
 
-If Pass 1 fails to produce valid JSON, the pipeline retries up to `max_retries` times with `retry_delay_ms` delay. Pass 2 does not retry.
+If Pass 1 fails to produce valid JSON, retried up to `max_retries` times with `retry_delay_ms` delay.
 
 ### Metrics
 
-Every `ChatResponse` carries:
-- `pass1_tokens`, `pass2_tokens`, `total_ms`
+Every `ChatResponse` carries: `pass1_tokens`, `pass2_tokens`, `total_ms`.
 
 ---
 
@@ -211,9 +186,7 @@ Every `ChatResponse` carries:
 
 **Fields:** `confidence` (float 0–1), `reasoning_type` (causal/deductive/inductive/abductive/analogical/associative), `reasoning_domain` (factual/ethical/spatial/temporal/social/mathematical), `uncertainty_flag` (bool), `contradiction_flag` (bool), `rule_candidate_signal` (bool).
 
-**Validation:** `confidence > 0.8` with `uncertainty_flag = true` is rejected as contradictory.
-
-**v1.4.0 usage:** All six fields are forwarded to `SelfImprovementLoop::on_inference()` after every inference.
+**Validation:** `confidence > 0.8` with `uncertainty_flag = true` is rejected as contradictory and triggers a retry.
 
 ---
 
@@ -223,13 +196,11 @@ Every `ChatResponse` carries:
 
 Persistent symbolic memory. Rules: `id`, `domain`, `condition`, `consequence`, `confidence`, `trigger_count`, timestamps, provenance (`episode_id`, `reasoning_type`).
 Storage: `data/memory/rules.json` (atomic writes).
-
-**v1.4.0:** Corrective rules generated by MetaCognition are stored here with `reasoning_type = "meta_correction"`. They are retrieved and injected like any other rule.
+v1.4.0: corrective rules stored here with `reasoning_type = "meta_correction"`.
 
 ### 4.2 KnowledgeGraph
 
-Typed nodes: `concept`, `fact`, `entity`, `relation`.
-Storage: `data/memory/knowledge.json`.
+Typed nodes: `concept`, `fact`, `entity`, `relation`. Storage: `data/memory/knowledge.json`.
 
 ### 4.3 EpisodicMemory
 
@@ -237,44 +208,32 @@ Append-only JSONL audit trail (`logs/episodic.log`). Never modified after write.
 
 ### 4.4 EpisodicStorage
 
-SQLite + FTS5 searchable index (`data/memory/episodes.db`). Synchronised with JSONL via migration on first open. Used by `DatasetCurator` (Layer 3) and `MetaCognition` (Layer 2) to query failure episodes.
+SQLite + FTS5 searchable index. Synchronised with JSONL via migration on first open. Used by `DatasetCurator` (Layer 3), `MetaCognition` (Layer 2), and `SchedulerEngine` (v1.5.0) to store scheduled task results.
 
 ### 4.5 SelfModel DB (v1.4.0)
 
-SQLite database at `data/self_model/self_model.db` (separate from episodes.db). Two tables:
+SQLite at `data/self_model/self_model.db`. Two tables: `domain_stats` and `reasoning_stats`. All writes are single-statement `INSERT ... ON CONFLICT DO UPDATE` upserts — O(1) regardless of inference count.
 
-**`domain_stats`** — running accumulators per reasoning domain:
-```sql
-domain TEXT PRIMARY KEY
-total_inferences     INTEGER
-total_contradictions INTEGER
-total_uncertainties  INTEGER
-total_rule_commits   INTEGER
-confidence_sum       REAL
-last_updated         TEXT
-```
+### 4.6 SchedulerStore (v1.5.0)
 
-**`reasoning_stats`** — running accumulators per reasoning type:
-```sql
-reasoning_type TEXT PRIMARY KEY
-usage_count         INTEGER
-confidence_sum      REAL
-contradiction_count INTEGER
-last_updated        TEXT
-```
+SQLite WAL at `data/scheduler/scheduler.db`. Three tables:
 
-All writes are single-statement `INSERT ... ON CONFLICT DO UPDATE` upserts — no read-before-write, O(1) regardless of inference count.
+**`scheduled_tasks`** — task definitions with trigger spec, action, run stats.
+**`task_runs`** — every run execution record with status, timing, result summary.
+**`task_action_logs`** — per-step action log within a run.
+
+WAL mode enabled for concurrent read during active run logging.
 
 ---
 
 ## 5. Retrieval System
 
 `EpisodicRetriever` provides three modes:
-- **KEYWORD** — SQLite FTS5, BM25 ranking.
-- **SEMANTIC** — TF-IDF cosine similarity (in-memory index).
-- **HYBRID** — weighted combination (default: 0.7 keyword, 0.3 semantic).
+- **KEYWORD** — SQLite FTS5, BM25 ranking
+- **SEMANTIC** — TF-IDF cosine similarity (in-memory index)
+- **HYBRID** — weighted combination (default: 0.7 keyword, 0.3 semantic)
 
-Retrieved episodes inject as a `[MEMORY CONTEXT]` block before the feeling output. Retrieval failure is non-fatal.
+Retrieved episodes inject as a `[MEMORY CONTEXT]` block. Retrieval failure is non-fatal.
 
 ---
 
@@ -282,27 +241,18 @@ Retrieved episodes inject as a `[MEMORY CONTEXT]` block before the feeling outpu
 
 Runs after every inference to maintain rule base integrity.
 
-- **Modes:** `symbolic` (default, SWI-Prolog), `neural` (small LLM), `hybrid`.
-- **Per-inference sequence:**
-  1. Rule extraction (if `rule_candidate_signal` true).
-  2. Consistency check against existing rules.
-  3. Contradiction resolution (auto or flagged).
-  4. Rule commit (if passes consistency check).
-  5. `set_extracted_rule_id()` on the episode record.
+- **Modes:** `symbolic` (SWI-Prolog), `neural` (small LLM), `hybrid`
+- **Per-inference sequence:** rule extraction → consistency check → contradiction resolution → rule commit → `set_extracted_rule_id()` on episode
 
 ---
 
 ## 7. Rule System
 
-Rules have: `id`, `domain`, `condition`, `consequence`, `confidence`, `trigger_count`, `episode_id` (provenance), `reasoning_type`.
+Rules: `id`, `domain`, `condition`, `consequence`, `confidence`, `trigger_count`, `episode_id`, `reasoning_type`.
 
 **Lifecycle:** extraction → consistency check → commit → confidence decay → pruning.
-
-**v1.4.0 additions:**
-- `meta_correction` reasoning type — rules generated by MetaCognition reflection passes.
-- Rules are used as training examples by `DatasetCurator` (rule augmentation).
-
-**Similarity dedup:** Jaccard overlap > 0.8 on condition text → merge rather than duplicate.
+**v1.4.0:** `meta_correction` type — rules from MetaCognition reflection passes.
+**Dedup:** Jaccard overlap > 0.8 on condition text → merge rather than duplicate.
 
 ---
 
@@ -315,23 +265,21 @@ Rules have: `id`, `domain`, `condition`, `consequence`, `confidence`, `trigger_c
 | `generate_feeling()` | GBNF constrained, ctx_pass1_ | GBNF constrained |
 | `generate_response()` | Free decode, ctx_pass2_ | Free decode |
 | `load_lora_adapter()` | `llama_adapter_lora_init` + `llama_set_adapters_lora` | no-op |
-| `unload_lora_adapter()` | `llama_set_adapters_lora(0)` + `llama_adapter_lora_free` | no-op |
+| `unload_lora_adapter()` | `llama_set_adapters_lora(0)` + free | no-op |
 
-**v1.4.0 additions to `LlamaCppBackend`:**
-- `get_llama_model()` — returns `model_*` (used by `LlamaCppTrainer` for adapter init)
-- `get_llama_context()` — returns `ctx_pass2_*` (adapter applied to free-decode context only)
-
-The adapter is applied only to `ctx_pass2_` and not `ctx_pass1_`. This is intentional — the constrained feeling pass should reflect the base model's intrinsic reasoning quality, not the adapter's influence.
+The adapter is applied only to `ctx_pass2_`. `ctx_pass1_` reflects the base model's intrinsic reasoning quality unmodified by fine-tuning.
 
 ---
 
 ## 9. Vision Subsystem (v1.3.0)
 
-Unchanged from v1.3.0. See v1.3.0 documentation for full reference.
+Unchanged from v1.3.0.
 
-- `VisionEncoder` — moondream2 via `mtmd` API.
-- `VisionCache` — URL download cache with TTL eviction.
-- `analyze_image` tool — accepts local paths and HTTP/HTTPS URLs.
+- **`VisionEncoder`** — moondream2 via `mtmd` API. Method: `encode(image_path, prompt, ImageMetadata) → VisionResult`
+- **`VisionCache`** — URL download cache with TTL eviction
+- **`analyze_image` tool** — accepts local paths and HTTP/HTTPS URLs
+
+**v1.5.0 usage:** `ScreenReader::analyze()` calls `VisionEncoder::encode()` with `ImageSource::FILE` to describe screenshots. Vision-based element finding uses the same encoder with a coordinate-extraction prompt.
 
 Performance on RTX 3050 4GB: ~9–10s first image, ~2–3s cached.
 
@@ -339,220 +287,501 @@ Performance on RTX 3050 4GB: ~9–10s first image, ~2–3s cached.
 
 ## 10. Self-Improvement Subsystem (v1.4.0)
 
-This is the primary new addition in v1.4.0. All three layers are owned and orchestrated by `SelfImprovementLoop`.
+All three layers owned and orchestrated by `SelfImprovementLoop`.
 
 ### 10.1 SelfImprovementLoop
 
 **File:** `src/training/self_improvement_loop.h/.cpp`
 
-The orchestrator. Constructed by `CardinalAPI::init()` after all subsystems are ready. Owns all three layers. Runs a single background training thread.
+**Hooks:**
+- `on_inference(domain, reasoning_type, confidence, contradiction, uncertainty, rule_committed)` — after every inference. Fast path: updates atomics, may trigger reflection or post to training thread.
+- `on_session_boundary()` — at `destroy_session()`. Applies pending LoRA adapter at a clean cut-point.
 
-**Two hooks into the inference path:**
-- `on_inference(domain, reasoning_type, confidence, contradiction, uncertainty, rule_committed)` — called after every `run_post_inference()`. Fast path: updates atomics, may trigger reflection or post to training thread.
-- `on_session_boundary()` — called by `destroy_session()`. Applies any pending LoRA adapter at a clean cut-point.
-
-**Training thread:** Sleeps on `condition_variable`, wakes on trigger or 60-second poll (for interval trigger). One cycle at a time; overlapping triggers are coalesced.
+**Training thread:** sleeps on `condition_variable`, wakes on trigger or 60-second poll. One cycle at a time; overlapping triggers coalesced.
 
 **Trigger conditions for Layer 3:**
+
 | Trigger | Config key | Default |
 |---------|-----------|---------|
 | Episode count | `trigger_every_n_episodes` | 100 |
 | Wall clock | `trigger_every_n_hours` | 24 |
 | Domain confidence below | `trigger_on_domain_confidence_below` | 0.5 |
-| Manual API | `POST /api/train` | — |
+| Manual | `POST /api/train` | — |
 
 ### 10.2 Layer 1 — SelfModel
 
-**File:** `src/self_model/self_model.h/.cpp`
+Maintains `data/self_model/self_model.db`. O(1) upsert after every inference. Provides `format_for_prompt()` for system prompt injection.
 
-Maintains `data/self_model/self_model.db`. Updated after every inference via single-statement SQLite upserts. Provides:
-- `record_inference()` — O(1) upsert, called on hot path.
-- `get_snapshot()` — builds `SelfModelSnapshot` with `DomainStats` and `ReasoningTypeStats`.
-- `get_weakest_domains(n)` — sorted by `weakness_score()`.
-- `format_for_prompt()` — compact text for system prompt injection.
-
-**Weakness score formula:**
-```
-weakness_score = (contradiction_rate × 0.4)
-               + (uncertainty_rate   × 0.3)
-               + ((1 - avg_confidence) × 0.3)
-```
-
-Scores range 0–1. Higher = more room for improvement.
+**Weakness score:** `(contradiction_rate × 0.4) + (uncertainty_rate × 0.3) + ((1 - avg_confidence) × 0.3)`
 
 ### 10.3 Layer 2 — MetaCognition
 
-**File:** `src/self_model/meta_cognition.h/.cpp`
+Reflection pass steps:
+1. Query recent failure episodes from `EpisodicStorage`
+2. Check `min_failures_to_reflect` threshold
+3. Build structured reflection prompt
+4. Single LLM pass (no tools, no feeling)
+5. Parse JSON findings array
+6. Commit corrective rules with `reasoning_type = "meta_correction"`
 
-**Trigger conditions:**
-- Every N inferences (counter resets after firing).
-- Contradiction rate for a domain exceeds `trigger_on_contradiction_rate_pct`% in a rolling window.
-- On-demand via `POST /api/reflect`.
-
-**Reflection pass steps:**
-1. Query `EpisodicStorage::get_recent()` for episodes with `contradiction=true` or `uncertainty=true`.
-2. Check `min_failures_to_reflect` threshold — abort if insufficient failures.
-3. Get `SelfModelSnapshot` for context.
-4. Build a structured reflection prompt (failure episodes + self-model summary).
-5. Run `ILLMBackend::generate_response()` — single LLM pass, no tools, no feeling.
-6. Parse the response as a JSON array of findings: `[{domain, pattern, recommendation, confidence}, ...]`.
-7. For each finding above `corrective_rule_confidence`:
-   - `RuleStore::add_rule(domain, "[pattern] ...", "[corrective] ...", confidence, ..., "meta_correction")`
-8. `RuleStore::save()` if any rules were committed.
-9. Return `ReflectionResult`.
-
-**Reflection uses `std::try_to_lock`** on `reflect_mutex_` — if a reflection is already running, the new trigger is silently dropped.
-
-**Reflection prompt format:** instructs the model to reply with only a JSON array and nothing else. The parser strips Markdown fences defensively and skips malformed entries individually.
+Uses `std::try_to_lock` — silently drops trigger if reflection already running.
 
 ### 10.4 Layer 3 — Training Pipeline
 
-#### CurriculumBuilder
+**CurriculumBuilder** — decides target domain by weakness score + recency bonus. Adjusts LoRA hyperparameters per weakness severity.
 
-**File:** `src/training/curriculum_builder.h/.cpp`
+**DatasetCurator** — converts episodes to alpaca format. Quality filters: confidence floor, minimum text length, FNV-1a dedup, holdout reservation. Rule augmentation adds corrective rules as training examples.
 
-Decides what to train on. Inspects `SelfModel::get_weakest_domains()` and applies a priority score:
+**LlamaCppTrainer** — PEFT subprocess → `convert_lora_to_gguf.py` → `llama_set_adapters_lora` on `ctx_pass2_` only.
 
-```
-priority_score = weakness_score
-               + recency_bonus  (up to +0.2 for domains not trained recently)
-```
+**TensorRTTrainer** — writes ready-to-run shell script to `data/training/scripts/`. `evaluate()` and `load_adapter()` are no-ops.
 
-Domains in cooldown (1 hour default) are skipped. If no domain exceeds `weakness_threshold` (default 0.4), a general all-domain plan is returned.
+**AdapterEvaluator** — improvement threshold gate (default 5%). Load policies: `"immediate"` or `"session_boundary"` (default).
 
-**LoRA overrides by weakness:**
-- `weakness_score > 0.6` — +1 epoch, learning rate × 0.5
-- `weakness_score > 0.4` — learning rate × 0.75
-- Below 0.4 — base config unchanged
+---
 
-#### DatasetCurator
+## 11. Scheduler Subsystem (v1.5.0)
 
-**File:** `src/training/dataset_curator.h/.cpp`
+### 11.1 Overview
 
-Converts episodes to `TrainingExample` (alpaca format: `instruction`, `input`, `output`, `domain`, `confidence`, `episode_id`).
+The Scheduler allows Cardinal to execute tasks autonomously on a defined schedule. Tasks are created from natural language descriptions, parsed into structured `ScheduledTask` objects, persisted in SQLite, and dispatched by a background engine thread.
 
-**Quality filters (all AND-combined):**
-- `confidence >= plan.min_episode_confidence`
-- `user_message` and `response_summary` non-empty, each ≥ 10 characters
-- Dedup on FNV-1a hash of `user_message`
-- Holdout set reserved (most-recent N episodes, never included in training)
+**Files:**
+- `src/scheduler/scheduler_types.h` — all shared types
+- `src/scheduler/scheduler_store.h/.cpp` — SQLite persistence
+- `src/scheduler/scheduler_parser.h/.cpp` — NL → ScheduledTask via InferencePipeline
+- `src/scheduler/scheduler_engine.h/.cpp` — background thread, trigger evaluation, dispatch
 
-**Rule augmentation:** For each committed rule above 0.5 confidence, adds a training example:
-```
-instruction: "Apply the following guideline in your response:"
-input:       "<condition> → <consequence>"
-output:      "I will keep in mind: <consequence> when reasoning about <domain> topics."
-```
+### 11.2 ScheduledTask Structure
 
-Final dataset is shuffled with `std::mt19937`.
-
-#### ITrainingBackend
-
-**File:** `src/training/i_training_backend.h`
-
-Abstract interface with five virtual methods: `prepare()`, `train()`, `evaluate()`, `load_adapter()`, `unload_adapter()`. Default `run_full_cycle()` implementation chains them in order and gates `load_adapter()` on the improvement threshold.
-
-#### LlamaCppTrainer
-
-**File:** `src/training/llama_cpp_trainer.h/.cpp`
-
-**`train()` subprocess sequence:**
-1. Write JSONL dataset to `data/training/datasets/<run_id>.jsonl`.
-2. Invoke `<python_venv>/bin/python -m cardinal_train` with LoRA hyperparameters. The script emits `STEP n/total LOSS f` lines parsed in real time by the progress callback.
-3. Run `convert_lora_to_gguf.py` on the HF adapter directory.
-4. Return `TrainingResult` with `adapter_path` pointing to the GGUF file.
-
-**`evaluate()` scoring:**
-- Baseline: average stored `ep.confidence` from holdout episodes (no inference needed, cached).
-- Eval: after loading adapter, run `generate_feeling()` on each holdout episode and read `ctx.feeling().confidence`. Average across holdout set.
-- `improvement_pct = (eval - baseline) / baseline × 100`.
-
-**Adapter loading:**
 ```cpp
-llama_adapter_lora* adapter = llama_adapter_lora_init(model, path.c_str());
-float scale = 1.0f;
-llama_set_adapters_lora(ctx_pass2_, &adapter, 1, &scale);
+struct ScheduledTask {
+    std::string id;               // UUID
+    std::string name;             // short human-readable name
+    std::string description;      // original NL description
+    bool        enabled;
+
+    TriggerSpec trigger;          // when to run
+    TaskAction  action;           // what to do
+
+    std::optional<bool> allow_file_write;
+    std::optional<bool> allow_web_access;
+    std::optional<bool> require_confirmation;
+    std::optional<bool> full_autonomy;
+
+    int    run_count;
+    int    fail_count;
+    std::string last_run_at;
+    std::string next_run_at;
+    std::string created_at;
+    std::string updated_at;
+    std::string created_from;     // "chat" | "api"
+    std::string created_in_session;
+};
 ```
 
-Applied to `ctx_pass2_` only (free-decode context). `ctx_pass1_` (constrained feeling pass) is left unmodified.
+### 11.3 Trigger Types
 
-**Unloading:**
+| Type | Description | Required fields |
+|------|-------------|-----------------|
+| `CRON` | Five-field cron expression | `cron_expression` |
+| `INTERVAL` | Every N seconds | `interval_seconds` |
+| `CONDITION` | Metric threshold expression | `condition_expr` |
+| `STARTUP` | Once on Cardinal start | — |
+| `IDLE` | After N idle minutes | `idle_minutes` |
+| `MANUAL` | Only via `run_now` API | — |
+
+**Cron format:** standard five-field: `minute hour dom month dow`. Supports `*/N` step, ranges, comma-separated values.
+
+**Condition expression variables:**
+`factual_confidence`, `total_contradictions`, `total_reflections`, `total_training_runs`, `last_improvement_pct`, `idle_minutes`, `hour_of_day`, `day_of_week`
+
+**Condition operators:** `<`, `>`, `<=`, `>=`, `==`, `!=`, `AND`
+
+Example: `"factual_confidence < 0.6 AND hour_of_day > 22"`
+
+### 11.4 Action Types
+
+| Type | Description |
+|------|-------------|
+| `AGENT_RUN` | Full agentic execution with tools |
+| `CHAT` | Single inference via InferencePipeline |
+| `REFLECT` | Force Layer 2 meta-cognition reflection |
+| `TRAIN` | Post Layer 3 training request |
+| `SELF_IMPROVEMENT` | Reflect then train |
+| `MAINTENANCE` | ConsistencyChecker maintenance cycle |
+| `EXPORT` | Training data export |
+| `SHELL` | Run a shell command |
+| `WEBHOOK` | POST result to a URL |
+
+### 11.5 Output Targets
+
+| Target | Description |
+|--------|-------------|
+| `MEMORY` (default) | Store result in episodic memory |
+| `FILE` | Write to `output_file` path |
+| `WEBHOOK` | POST JSON to `webhook_url` |
+| `DISCARD` | Run silently, discard output |
+| `BOTH` | MEMORY + FILE |
+
+### 11.6 SchedulerParser
+
+**File:** `src/scheduler/scheduler_parser.h/.cpp`
+
+Takes an `InferencePipeline*` and converts natural language task descriptions to `ScheduledTask` structs.
+
+**`parse(nl_description, session_id)` steps:**
+1. Builds a structured system prompt with full JSON schema and selection rules
+2. Calls `InferencePipeline::run(InferenceRequest)` with `tools_enabled=false`
+3. Parses model JSON output via `extract_from_json()` (public static — callable directly)
+4. Validates confidence threshold (default 0.70)
+5. If confidence < threshold, sets `clarification_needed` and returns
+6. Calls `finalise_task()` — assigns UUID, timestamps, session context
+
+**`extract_from_json(model_output, session_id, min_confidence)` is public static** so `SchedulerEngine::create_task_from_nl()` can call it directly after its own LLM call.
+
+**Note:** Raw string literals with `##` or `→` characters cannot be used in the prompt string — GCC treats `##` as a preprocessor token and `→` as a multi-byte identifier. The prompt is built with regular string concatenation.
+
+### 11.7 SchedulerEngine
+
+**File:** `src/scheduler/scheduler_engine.h/.cpp`
+
+**Background thread lifecycle:**
+1. On `start()`: opens SQLite store, fires STARTUP tasks immediately, starts `engine_loop()` thread
+2. Engine loop: sleeps `check_interval_seconds` on `condition_variable`, calls `tick()` on wake
+3. `tick()`: iterates enabled tasks, evaluates triggers via `should_fire()`, calls `dispatch_task()` for any that fire
+4. On `stop()`: sets `stop_requested_=true`, notifies CV, joins thread, closes store
+
+**Trigger evaluation:**
+- `CRON` — compares current `localtime` against five cron fields, deduplicates by checking `last_run_at` within same minute
+- `INTERVAL` — compares `now - last_run_at` against `interval_seconds`
+- `CONDITION` — evaluates expression via `eval_condition_expr()` using metric variables from `SelfImprovementStatus`
+- `IDLE` — checks `now - last_inference_at_` against `idle_minutes × 60`
+
+**Task dispatch:**
+- Maximum one concurrent task (`max_concurrent_tasks=1`)
+- Safety whitelist check before dispatch
+- Spawns a detached `std::thread` for execution
+- Updates `task_runs` and `task_action_logs` in SQLite after completion
+- Calls `store_result_to_episodic()` for MEMORY/BOTH output targets
+
+**Action handlers:**
+- `AGENT_RUN` — constructs `AgentGoal`, calls `AgentExecutor::run()` with a fresh `TraceBuilder`
+- `CHAT` — builds `InferenceRequest`, calls `InferencePipeline::run()`
+- `REFLECT` — calls `SelfImprovementLoop::trigger_reflection()`
+- `TRAIN` — calls `SelfImprovementLoop::trigger_training(domain_hint)`
+- `SHELL` — `popen()` with blocked_commands safety check
+- `WEBHOOK` — `curl` subprocess POST with JSON payload
+
+### 11.8 `schedule_task` Tool
+
+**File:** `src/tools/builtin/computer/tool_schedule_task.h/.cpp`
+
+Registered when `scheduler.enabled=true` (works headless — no display required).
+
+**Actions:** `create`, `list`, `enable`, `disable`, `delete`, `run_now`
+
+**Tool call examples:**
+```json
+{"name": "schedule_task", "arguments": {"action": "create", "description": "search for AI news every morning at 7am"}}
+{"name": "schedule_task", "arguments": {"action": "list"}}
+{"name": "schedule_task", "arguments": {"action": "run_now", "task_id": "abc12345"}}
+```
+
+---
+
+## 12. Computer Use Subsystem (v1.5.0)
+
+### 12.1 Overview
+
+Cardinal can see and operate a desktop environment. The subsystem is initialised when `computer_use.enabled=true`. Display server (X11 / Wayland / headless) is detected at runtime by `DisplayDetector`.
+
+All computer use controllers are owned by `CardinalAPI` and wired into `ToolExecutor` via setters after initialisation. The `ToolExecutor::dispatch()` function routes tool calls (`screenshot`, `click`, `type_text`, etc.) to their respective `execute_*()` implementations.
+
+**Files:** `src/computer/`
+
+### 12.2 DisplayDetector
+
+**File:** `src/computer/display_detector.h/.cpp`
+
+Detects the display server by checking environment variables and probing live connections:
+
+1. Check `WAYLAND_DISPLAY` — if set and socket exists → Wayland
+2. Check `DISPLAY` — if set and X server responds → X11
+3. Otherwise → headless
+
+Provides `DisplayDetector::info()` returning `ScreenInfo` with `server`, `display_var`, `width`, `height`, `scale_factor`.
+
+Methods used by controllers:
+- `is_x11()`, `is_wayland()`, `is_headless()`
+- `has_scrot()`, `has_grim()` — tool availability checks
+
+### 12.3 ScreenReader
+
+**File:** `src/computer/screen_reader.h/.cpp`
+
+**`capture(analyze)` → `Screenshot`:**
+- X11: `scrot <path>` subprocess
+- Wayland: `grim <path>` subprocess
+- If `analyze=true` and `VisionEncoder` is ready: calls `VisionEncoder::encode(path, prompt, meta)` with `ImageMetadata{origin=path, cache_path=path, source=ImageSource::FILE}`. Result stored in `Screenshot::description`.
+
+**`capture_region(ScreenRegion, analyze)`:** passes `-a x,y,w,h` to scrot or `-g "x,y WxH"` to grim.
+
+**`analyze(image_path, prompt)` → `std::string`:** direct vision encode call. Returns `VisionResult::description`.
+
+**`find_element(description)` → `std::optional<Point>`:** captures a screenshot, calls vision with a coordinate-extraction prompt: `"Find the UI element described as: '...' Respond ONLY with: x=NNN y=NNN"`. Parses `x=NNN y=NNN` from the response.
+
+### 12.4 InputController
+
+**File:** `src/computer/input_controller.h/.cpp`
+
+**X11 (xdotool):**
+- `mouse_click(x, y, button, clicks)` — `xdotool mousemove --sync x y click --clearmodifiers button` (repeated `clicks` times)
+- `type_text(text)` — `xdotool type --clearmodifiers "text"`
+- `send_key(key)` — `xdotool key --clearmodifiers "key"`
+- `mouse_scroll(x, y, dx, dy)` — `xdotool scroll`
+
+**Wayland (ydotool + wtype):**
+- `wl_mouse_click(x, y, button, clicks)` — `ydotool mousemove abs x y` + `ydotool click button`
+- `type_text(text)` — `wtype "text"`
+- `send_key(key)` — `ydotool key keycode`
+
+Display server chosen at call time based on `DisplayDetector::is_x11()`.
+
+### 12.5 AppController
+
+**File:** `src/computer/app_controller.h/.cpp`
+
+| Method | X11 | Wayland |
+|--------|-----|---------|
+| `open_app(name)` | `gtk-launch name.desktop` then `exec name` fallback | same |
+| `close_app(name)` | `wmctrl -c name` then `pkill name` | `swaymsg [app_id=name] kill` |
+| `focus_app(name)` | `wmctrl -a name` | `swaymsg [app_id=name] focus` |
+| `list_apps()` | `wmctrl -l` parsed | `swaymsg -t get_tree` parsed |
+| `get_app(name)` | fuzzy match on list_apps | same |
+| `get_focused_app()` | `xprop -root _NET_ACTIVE_WINDOW` | `swaymsg -t get_tree` |
+
+`is_app_allowed(name)` checks against `computer_use.safety.allowed_apps`. If the list is empty, all apps are allowed.
+
+### 12.6 BrowserController
+
+**File:** `src/computer/browser_controller.h/.cpp`
+
+Spawns a persistent Python helper process using the Playwright library from the browser venv. The helper communicates via stdin/stdout JSON lines and is kept alive for the session to avoid Playwright startup overhead on every action.
+
+**Helper process lifecycle:**
+- Started lazily on first `execute()` call via `ensure_started()`
+- `start()` uses `venv_python(venv_path)` to find the interpreter
+- `stop()` writes `{"action": "exit"}` then waits for process exit
+
+**All actions go through `execute(BrowserAction)`.** Convenience wrappers (`navigate`, `click`, `click_text`, `type`, `get_content`, `screenshot`, `execute_js`) build `BrowserAction` and call `execute()`.
+
+**`BrowserActionType` enum:** `NAVIGATE`, `CLICK`, `CLICK_TEXT`, `TYPE`, `SCROLL`, `GET_CONTENT`, `SCREENSHOT`, `EXECUTE_JS`, `NEW_TAB`, `CLOSE_TAB`, `BACK`, `FORWARD`, `RELOAD`
+
+**Domain safety:** `is_domain_allowed(url)` checks against `allowed_domains` / `blocked_domains`. If `allowed_domains` is empty, all domains are permitted.
+
+**Vision fallback:** if a selector-based click fails and `VisionEncoder` is available, falls back to screenshot + vision coordinate extraction.
+
+### 12.7 ShellExecutor
+
+**File:** `src/computer/shell_executor.h/.cpp`
+
+Runs commands via `popen()` with a configurable timeout. The timeout is implemented with a background thread that calls `kill(pid, SIGKILL)` if `timeout_seconds > 0` and the process exceeds it.
+
+**Safety checks before execution:**
+1. `shell.enabled` must be true in config
+2. Command must not contain any `blocked_commands` substring
+3. Working directory changed to `working_directory` if non-empty
+
+**Returns `ShellResult`:** `success`, `exit_code`, `stdout_text`, `stderr_text`, `duration_ms`, `command`.
+
+### 12.8 FileManager
+
+**File:** `src/computer/file_manager.h/.cpp`
+
+All operations validate the resolved path against `computer_use.safety.allowed_paths`. Tilde expansion via `expand_home()`.
+
+| Method | Description |
+|--------|-------------|
+| `list(path, recursive)` | Returns `FileOpResult` with `entries` vector |
+| `move(src, dst)` | `std::filesystem::rename` |
+| `copy(src, dst)` | `std::filesystem::copy` with `overwrite_existing` |
+| `remove(path)` | `std::filesystem::remove_all` |
+| `mkdir(path)` | `std::filesystem::create_directories` |
+| `stat(path)` | Returns size, permissions, modified time |
+| `exists(path)` | `std::filesystem::exists` |
+
+**`FileOpResult`** contains: `success`, `error_message`, `entries` (vector of `FileEntry`), `dest_path`.
+
+**`FileEntry`**: `name`, `path`, `is_dir`, `size_bytes`, `permissions`, `modified_at`.
+
+File writes (`allow_file_write` config flag) are enforced via `is_write_allowed()`.
+
+### 12.9 SystemController
+
+**File:** `src/computer/system_controller.h/.cpp`
+
+| Method | Tool used |
+|--------|-----------|
+| `get_state()` | `pactl get-sink-volume`, `/proc/net/wireless`, `rfkill list` |
+| `set_volume(pct)` | `pactl set-sink-volume @DEFAULT_SINK@ pct%` |
+| `set_mute(bool)` | `pactl set-sink-mute @DEFAULT_SINK@ 0/1` |
+| `set_brightness(pct)` | `brightnessctl set pct%` |
+| `set_wifi(bool)` | `nmcli radio wifi on/off` |
+| `set_bluetooth(bool)` | `bluetoothctl power on/off` |
+| `set_notifications(bool)` | `gsettings set org.gnome.desktop.notifications show-banners true/false` |
+
+`get_state()` returns a `SystemState` struct: `volume_pct`, `muted`, `brightness_pct`, `wifi_enabled`, `wifi_ssid`, `bluetooth_enabled`, `battery_pct`, `battery_charging`.
+
+### 12.10 EmailController
+
+**File:** `src/computer/email_controller.h/.cpp`
+
+Two modes, selected by `computer_use.email.mode`:
+
+**`imap_smtp` mode:** Python subprocess using `imaplib` and `smtplib`. Password from `CARDINAL_EMAIL_PASS` environment variable — never in config.
+
+**`gmail_api` mode:** Python subprocess using `google-api-python-client`. Credentials from `gmail_credentials_path`. OAuth token auto-refreshed.
+
+**`read(EmailQuery)` → `vector<EmailMessage>`**
+
+`EmailQuery` fields: `folder`, `subject_contains`, `from_contains`, `unread_only`, `max_results`.
+
+`EmailMessage` fields: `id`, `message_id`, `from`, `to`, `subject`, `date`, `body_text`, `body_html`, `unread`.
+
+**`send(EmailSendRequest)` → `bool`**
+
+`EmailSendRequest` fields: `to` (vector), `cc` (vector), `subject`, `body`, `html_body`.
+
+### 12.11 AtSpiReader
+
+**File:** `src/computer/atspi_reader.h/.cpp`
+
+Reads application accessibility trees via a Python subprocess using `pyatspi`. The Python script is built using `std::string +=` concatenation (not raw string literals with operator `+`, which causes pointer arithmetic errors with `const char[]`).
+
+**`get_tree(app_name)` → `std::optional<AtSpiNode>`**
+
+Walks the AT-SPI2 accessibility tree for the named application up to depth 8.
+
+**`find_nodes(app_name, role, name_contains)` → `vector<AtSpiNode>`**
+
+Searches the tree for nodes matching role (e.g. `"push button"`) and optional name substring.
+
+**`AtSpiNode`:** `role`, `name`, `bounds` (x,y,width,height), `states` (vector), `children` (vector, recursive).
+
+Used as the primary method for element location before falling back to vision-based coordinate finding.
+
+### 12.12 Computer Use Tools (v1.5.0)
+
+All registered when `computer_use.enabled=true`. Each has a `make_*_tool_def(const CardinalConfig&)` factory function.
+
+| Tool | File | Key arguments |
+|------|------|---------------|
+| `screenshot` | `tool_screenshot.cpp` | `analyze`, `prompt`, `region_x/y/w/h` |
+| `click` | `tool_click.cpp` | `description` OR `x`+`y`, `button`, `double_click`, `app` |
+| `type_text` | `tool_type_text.cpp` | `text` OR `key`, `delay_ms` |
+| `open_app` | `tool_open_app.cpp` | `app`, `focus` |
+| `close_app` | `tool_close_app.cpp` | `app` |
+| `browser` | `tool_browser.cpp` | `action`, `url`, `selector`, `text`, `script`, `scroll_y` |
+| `shell_run` | `tool_shell_run.cpp` | `command`, `timeout_seconds`, `working_dir` |
+| `file_ops` | `tool_file_ops.cpp` | `action`, `path`, `dest`, `recursive` |
+| `system_control` | `tool_system_control.cpp` | `action`, `value` |
+| `email` | `tool_email.cpp` | `action`, `folder`, `subject`, `from`, `to`, `body` |
+| `watch_screen` | `tool_watch_screen.cpp` | `wait_for`, `timeout_seconds`, `poll_seconds`, `analyze` |
+| `schedule_task` | `tool_schedule_task.cpp` | `action`, `description`, `task_id` |
+
+**Browser and email are only registered if their respective sub-configs are non-empty.** Shell is only registered if `shell.enabled=true`.
+
+---
+
+## 13. Watch Subsystem (v1.5.0)
+
+**Files:** `src/watch/`
+
+Three independent watchers providing event-driven observation.
+
+### 13.1 FileWatcher
+
+**File:** `src/watch/file_watcher.h/.cpp`
+
+inotify-based file system monitoring. Configured via `FileWatchConfig`: `path`, `recursive`, `events` (CREATE/MODIFY/DELETE/MOVE), `callback`.
+
+### 13.2 ScreenWatcher
+
+**File:** `src/watch/screen_watcher.h/.cpp`
+
+Periodic screenshot diff using ImageMagick `compare -metric PSNR`. Configured via `ScreenWatchConfig`: `poll_interval_seconds`, `psnr_threshold`, `region` (optional), `callback`.
+
+The `watch_screen` tool wraps this with a blocking wait — it polls until PSNR drops below threshold (visual change detected) or timeout expires.
+
+### 13.3 ProcessWatcher
+
+**File:** `src/watch/process_watcher.h/.cpp`
+
+`/proc` polling for process start/stop events. Configured via `ProcessWatchConfig`: `process_name`, `poll_interval_seconds`, `on_start_callback`, `on_stop_callback`.
+
+---
+
+## 14. Agentic Pipeline
+
+Unchanged from v1.2.0. `AgentExecutor::run(AgentGoal, TraceBuilder&, AgentProgressCallback)`.
+
+```
+AgentExecutor::run(goal, trace_builder, progress_cb)
+  1. PLAN  — planner.decompose(goal) → vector<AgentStep>
+  2. EXECUTE LOOP (max_iterations)
+     a. THINK — LLM generates action
+     b. ACT   — ToolExecutor::execute() → result → working_memory
+     c. OBSERVE — check goal_achieved
+  3. FINALIZE — synthesize response, finalize trace
+```
+
+`AgentGoal` fields: `session_id`, `goal`, `max_iterations`, `stream`.
+
+**v1.5.0:** All computer use tools are available within the agentic loop. When Cardinal runs an `AGENT_RUN` task from the scheduler, it constructs an `AgentGoal` and calls `AgentExecutor::run()` with a fresh `TraceBuilder("scheduler", "scheduler", "")`.
+
+---
+
+## 15. Tools System
+
+### Registered tools (v1.5.0)
+
+| Tool | Condition |
+|------|-----------|
+| `web_search` | `tools.web_search.enabled` |
+| `web_fetch` | `tools.web_fetch.enabled` |
+| `calculator` | `tools.calculator.enabled` |
+| `run_python` | `tools.run_python.enabled` |
+| `file_read` | `tools.file_read.enabled` |
+| `file_write` | `tools.file_write.enabled` |
+| `knowledge_graph_query` | `tools.knowledge_graph.enabled` |
+| `episodic_search` | `tools.episodic_search.enabled` |
+| `analyze_image` | `vision.model_path` non-empty |
+| `screenshot` through `watch_screen` | `computer_use.enabled` |
+| `browser` | `computer_use.enabled` AND `browser.venv_path` non-empty |
+| `shell_run` | `computer_use.enabled` AND `shell.enabled` |
+| `email` | `computer_use.enabled` AND `email.enabled` |
+| `schedule_task` | `scheduler.enabled` (headless-safe) |
+
+### ToolExecutor dispatch
+
+`ToolExecutor::dispatch()` routes by tool name. Computer use controllers are injected via setters called from `CardinalAPI::init()` after the computer use block is initialised:
+
 ```cpp
-llama_set_adapters_lora(ctx_pass2_, nullptr, 0, nullptr);
-llama_adapter_lora_free(active_lora_handle_);
-```
-
-#### TensorRTTrainer
-
-**File:** `src/training/tensorrt_trainer.h/.cpp`
-
-Script-export mode. `train()` writes a self-contained shell script to `data/training/scripts/train_<run_id>.sh` containing:
-1. PEFT training invocation
-2. `convert_lora_to_gguf.py` invocation
-3. Commented-out `trtllm-build` block for engine rebuild
-
-Returns immediately. `evaluate()` and `load_adapter()` are no-ops with informational messages. Intended for production deployments where training runs on a separate orchestration cluster.
-
-#### AdapterEvaluator
-
-**File:** `src/training/adapter_evaluator.h/.cpp`
-
-Applies the improvement threshold gate and load policy:
-
-**`improvement_threshold_pct`** (default 5%): adapter rejected if improvement below this.
-
-**Load policies:**
-- `"immediate"` — calls `backend_.load_adapter()` immediately on the calling thread (training thread).
-- `"session_boundary"` (default) — stores adapter path in `pending_adapter_path_`. Applied by `on_session_boundary()` → `apply_pending_adapter()` when no inference is active.
-
-Session boundary policy prevents a mid-conversation weight swap causing inconsistency within a session.
-
----
-
-## 11. Agentic Pipeline (Unified)
-
-Unchanged from v1.2.0. The PLAN → EXECUTE (THINK → ACT → OBSERVE) → FINALIZE loop. Vision tools and self-improvement rules are both available within the agentic loop.
-
-```
-AgentExecutor::run(goal):
-
-  1. PLAN
-     planner.decompose(goal) → vector<AgentStep>
-     feeling pass on plan → confidence check
-     symbolic check: plan contradicts known rules?
-
-  2. EXECUTE LOOP
-     a. THINK — LLM generates action for this step
-     b. ACT — tool_executor.execute(), result → working_memory
-     c. OBSERVE — inject tool results, check goal_achieved?
-
-  3. FINALIZE
-     generate final response
-     trace_builder.finalize()
-     audit_log.append(signed_trace)
+tool_executor_->set_screen_reader(screen_reader_.get());
+tool_executor_->set_input_controller(input_controller_.get());
+tool_executor_->set_app_controller(app_controller_.get());
+tool_executor_->set_browser_controller(browser_controller_.get());
+tool_executor_->set_shell_executor(shell_executor_.get());
+tool_executor_->set_file_manager(file_manager_.get());
+tool_executor_->set_system_controller(system_controller_.get());
+tool_executor_->set_email_controller(email_controller_.get());
+tool_executor_->set_scheduler(scheduler_.get());
 ```
 
 ---
 
-## 12. Tools System
-
-| Tool | Description | v1.4.0 Note |
-|------|-------------|-------------|
-| `web_search` | DuckDuckGo search | Unchanged |
-| `web_fetch` | Fetch and parse URL | Unchanged |
-| `calculator` | Math expression (muparser) | Unchanged |
-| `run_python` | Sandboxed Python | Unchanged |
-| `file_read` | Read from allowed paths | Unchanged |
-| `file_write` | Write to allowed paths | Unchanged |
-| `knowledge_graph_query` | Query KG | Unchanged |
-| `episodic_search` | Search episodes | Unchanged |
-| `analyze_image` (v1.3.0) | Image description | Unchanged |
-
-Self-improvement does not add new tools. Corrective rules generated by MetaCognition are injected as regular rules and surface in inference prompts automatically.
-
----
-
-## 13. Explainability Exports
+## 16. Explainability Exports
 
 Unchanged from v1.2.0. Every inference produces a signed, tamper-evident trace:
 
@@ -572,207 +801,190 @@ Unchanged from v1.2.0. Every inference produces a signed, tamper-evident trace:
 }
 ```
 
-**v1.4.0 note:** Meta-correction rules that were applied during an inference appear in `rules_applied` with `reasoning_type = "meta_correction"`, making the self-improvement influence fully traceable and auditable.
+**v1.4.0 note:** Meta-correction rules appear in `rules_applied` with `reasoning_type = "meta_correction"`.
+**v1.5.0 note:** Scheduled task inferences do not produce audit log entries (no AuditLog pointer available in SchedulerEngine). Computer use tool calls appear in the normal inference trace when invoked from chat or the agentic loop.
 
 ---
 
-## 14. Training Export
+## 17. Training Export
 
-`TrainingExporter` exports high-confidence episodes and committed rules as Alpaca JSONL for external LoRA fine-tuning. This is the manual export path. The automatic Layer 3 pipeline uses `DatasetCurator` directly without going through `TrainingExporter`.
+`TrainingExporter` exports high-confidence episodes as Alpaca JSONL for external use. This is the manual export path. Layer 3 uses `DatasetCurator` directly.
 
 **Filter parameters:** `min_confidence`, `domain`, `max_examples`, `include_rules`, `recent_first`.
 
-**Output format:**
-```json
-{"instruction": "<user_message>", "input": "", "output": "<response>"}
-```
-
 ---
 
-## 15. Configuration Reference
+## 18. Configuration Reference
 
-### 15.1 `backend` section (unchanged)
+### 18.1 `backend` (unchanged)
 
-`type` ("llama_cpp" or "tensorrt"), `llama_cpp.*`, `tensorrt.*`.
+`type` (`"llama_cpp"` or `"tensorrt"`), `llama_cpp.*`, `tensorrt.*`.
 
-### 15.2 `inference` section (unchanged)
+### 18.2 `inference` (unchanged)
 
 `temperature`, `top_p`, `max_tokens_feeling`, `max_tokens_response`.
 
-### 15.3 `feeling_schema` section (unchanged)
+### 18.3 `feeling_schema` (unchanged)
 
 `type`, `grammar_path`, `fields`, `max_tokens`.
 
-### 15.4 `memory` section (unchanged)
+### 18.4 `memory` (unchanged)
 
 `rule_store_path`, `knowledge_graph_path`, `episodic_log_path`, `max_rules`.
 
-### 15.5 `verifier` section (unchanged)
+### 18.5 `verifier` (unchanged)
 
-`mode`, `neural_model_path`, `neural_gpu_layers`, `neural_max_tokens`, `contradiction_threshold`, `rule_confidence_decay`, `min_rule_confidence`.
+`mode`, `neural_model_path`, `contradiction_threshold`, `rule_confidence_decay`, `min_rule_confidence`.
 
-### 15.6 `feedback` section (unchanged)
+### 18.6 `retriever` (unchanged)
 
-`max_retries`, `retry_delay_ms`, `rule_injection_format`.
+`mode`, `keyword_weight`, `semantic_weight`, `max_results`, `min_score`.
 
-### 15.7 `retriever` section (unchanged)
-
-`mode`, `keyword_weight`, `semantic_weight`, `max_results`, `min_score`, `cache_rebuild_strategy`, `cache_rebuild_threshold`, `cache_rebuild_interval_seconds`.
-
-### 15.8 `tools` section (unchanged)
+### 18.7 `tools` (unchanged)
 
 Per-tool `enabled`, `confirmation_required`, and tool-specific parameters.
 
-### 15.9 `agent` section (unchanged)
+### 18.8 `agent` (unchanged)
 
-`enabled`, `max_iterations`, `max_iterations_hard_cap`, `working_memory_path`, `working_memory_size`, `self_correction_enabled`, `self_correction_max_attempts`, `plan_before_execute`, `summarize_on_cap`.
+`enabled`, `max_iterations`, `self_correction_enabled`, `plan_before_execute`.
 
-### 15.10 `explainability` section (unchanged)
+### 18.9 `explainability` (unchanged)
 
-`enabled`, `audit_log_path`, `signing_enabled`, `private_key_path`, `public_key_path`, `auto_generate_keys`, `export_path`, `attach_trace_to_response`.
+`enabled`, `audit_log_path`, `signing_enabled`, `private_key_path`, `public_key_path`.
 
-### 15.11 `vision` section (v1.3.0, unchanged)
+### 18.10 `vision` (v1.3.0, unchanged)
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `model_path` | string | – | Path to moondream2 text GGUF |
-| `mmproj_path` | string | – | Path to moondream2 mmproj |
-| `cache_ttl_hours` | int | `24` | Image cache TTL (`0` = never delete) |
-| `allowed_paths` | array | `[]` | Local directories `analyze_image` may read |
+`model_path`, `mmproj_path`, `gpu_layers`, `threads`, `max_tokens`, `cache_path`, `cache_ttl_hours`, `allowed_paths`.
 
-### 15.12 `self_improvement` section (v1.4.0) ← NEW
+### 18.11 `self_improvement` (v1.4.0, unchanged)
+
+See v1.4.0 documentation for full reference.
+
+### 18.12 `api` (unchanged)
+
+`http_enabled`, `host`, `port`, `auth_enabled`, `api_key`, `stream_enabled`.
+
+### 18.13 `scheduler` (v1.5.0) ← NEW
 
 ```json
 {
-  "self_improvement": {
+  "scheduler": {
     "enabled": true,
+    "db_path": "data/scheduler/scheduler.db",
+    "check_interval_seconds": 30,
+    "max_concurrent_tasks": 1,
+    "idle_threshold_minutes": 5,
+    "task_session_prefix": "scheduler_",
+    "run_history_max_entries": 1000,
+    "max_task_duration_seconds": 300
+  }
+}
+```
 
-    "self_model": {
-      "enabled": true,
-      "db_path": "data/self_model/self_model.db",
-      "inject_into_prompt": true,
-      "prompt_max_chars": 500,
-      "history_window": 100
+| Key | Type | Description |
+|-----|------|-------------|
+| `enabled` | bool | Enable the scheduler engine and `schedule_task` tool |
+| `db_path` | string | SQLite database path |
+| `check_interval_seconds` | int | How often the engine ticks (evaluates triggers) |
+| `max_concurrent_tasks` | int | Maximum tasks running simultaneously (currently 1) |
+| `idle_threshold_minutes` | int | Minutes without inference before idle trigger fires |
+| `task_session_prefix` | string | Prefix for sessions created by scheduled tasks |
+| `run_history_max_entries` | int | Maximum run history entries retained per task |
+| `max_task_duration_seconds` | int | Hard timeout for any single task run |
+
+### 18.14 `computer_use` (v1.5.0) ← NEW
+
+```json
+{
+  "computer_use": {
+    "enabled": true,
+    "safety": {
+      "whitelist_enabled": true,
+      "allowed_apps": ["google-chrome", "firefox", "nautilus"],
+      "allowed_domains": [],
+      "allowed_paths": ["~/Documents", "~/Downloads", "~/Desktop", "data/"],
+      "blocked_commands": ["rm -rf /", "mkfs", ":(){:|:&};:"],
+      "confirmation_required": true,
+      "confirmation_timeout_seconds": 30,
+      "full_autonomy": false,
+      "allow_file_write": false
     },
-
-    "meta_cognition": {
-      "enabled": true,
-      "trigger_every_n_inferences": 20,
-      "trigger_on_contradiction_rate_pct": 30.0,
-      "on_demand_via_api": true,
-      "min_failures_to_reflect": 5,
-      "max_corrective_rules_per_session": 10,
-      "corrective_rule_confidence": 0.6
+    "screen": {
+      "screenshot_tool": "auto",
+      "vision_analysis": true,
+      "watch_interval_seconds": 2
     },
-
-    "training": {
+    "browser": {
+      "executable": "google-chrome",
+      "venv_path": "~/cardinal/cardinal-browser-venv",
+      "playwright_timeout_ms": 10000,
+      "headless": false,
+      "user_data_dir": "data/browser_profile"
+    },
+    "shell": {
       "enabled": true,
-      "lora_rank": 8,
-      "lora_alpha": 16,
-      "learning_rate": 0.0001,
-      "epochs": 3,
-      "batch_size": 4,
-      "min_episodes_for_training": 50,
-      "min_quality_confidence": 0.75,
-      "max_examples": 0,
-      "trigger_every_n_episodes": 100,
-      "trigger_every_n_hours": 24,
-      "trigger_on_domain_confidence_below": 0.5,
-      "adapter_load_policy": "session_boundary",
-      "eval_improvement_threshold_pct": 5.0,
-      "eval_holdout_episodes": 20,
-      "adapter_output_dir": "data/training/adapters",
-      "dataset_output_dir": "data/training/datasets",
-      "export_script_dir": "data/training/scripts",
-      "hf_model_path": "models/qwen3.5-4b-hf",
-      "python_venv": "~/cardinal/cardinal-train-venv",
-      "convert_lora_script": "vendor/llama.cpp/convert_lora_to_gguf.py",
-      "llama_finetune_binary": "vendor/llama.cpp/build/bin/llama-finetune"
+      "shell": "/bin/bash",
+      "timeout_seconds": 30,
+      "working_directory": "~"
+    },
+    "email": {
+      "enabled": false,
+      "mode": "imap_smtp",
+      "imap_host": "",
+      "imap_port": 993,
+      "smtp_host": "",
+      "smtp_port": 587,
+      "address": "",
+      "gmail_api_enabled": false,
+      "gmail_credentials_path": "data/gmail_credentials.json"
+    },
+    "atspi": {
+      "enabled": true,
+      "fallback_to_vision": true
     }
   }
 }
 ```
 
-**`self_improvement.enabled`** — master switch. If `false`, none of the three layers start.
-
-**`self_model` sub-keys:**
+**`safety` sub-keys:**
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `enabled` | bool | Layer 1 on/off |
-| `db_path` | string | SQLite database path |
-| `inject_into_prompt` | bool | Prepend `[Self-Model]` block to system prompt |
-| `prompt_max_chars` | int | Maximum characters for the injected block |
-| `history_window` | int | Reserved for future rolling-window averaging |
+| `whitelist_enabled` | bool | Enforce `allowed_apps` whitelist |
+| `allowed_apps` | array | App names/executables permitted. Empty = all allowed |
+| `allowed_domains` | array | Browser domains permitted. Empty = all allowed |
+| `allowed_paths` | array | File paths accessible to file_ops and shell |
+| `blocked_commands` | array | Shell substrings that trigger immediate abort |
+| `confirmation_required` | bool | Require human confirmation before executing |
+| `confirmation_timeout_seconds` | int | Seconds to wait for confirmation |
+| `full_autonomy` | bool | Override all confirmation requirements |
+| `allow_file_write` | bool | Permit write operations via file_ops tool |
 
-**`meta_cognition` sub-keys:**
-
-| Key | Type | Description |
-|-----|------|-------------|
-| `enabled` | bool | Layer 2 on/off |
-| `trigger_every_n_inferences` | int | Fire reflection every N inferences |
-| `trigger_on_contradiction_rate_pct` | float | Fire if contradiction rate exceeds this % |
-| `on_demand_via_api` | bool | Allow `POST /api/reflect` |
-| `min_failures_to_reflect` | int | Minimum failure episodes needed to run |
-| `max_corrective_rules_per_session` | int | Cap on rules committed per reflection pass |
-| `corrective_rule_confidence` | float | Minimum finding confidence to commit a rule |
-
-**`training` sub-keys:**
+**`browser` sub-keys:**
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `enabled` | bool | Layer 3 on/off |
-| `lora_rank` | int | LoRA rank (r). Higher = more capacity, more VRAM |
-| `lora_alpha` | int | LoRA alpha. Effective scale = alpha/rank |
-| `learning_rate` | float | AdamW learning rate |
-| `epochs` | int | Training epochs (CurriculumBuilder may +1 for weak domains) |
-| `batch_size` | int | Training batch size |
-| `min_episodes_for_training` | int | Minimum total episodes before any training runs |
-| `min_quality_confidence` | float | Episode quality floor for dataset inclusion |
-| `max_examples` | int | Hard cap on dataset size (0 = unlimited) |
-| `trigger_every_n_episodes` | int | Fire training after N new episodes |
-| `trigger_every_n_hours` | int | Fire training every N hours |
-| `trigger_on_domain_confidence_below` | float | Fire training if any domain avg_confidence < this |
-| `adapter_load_policy` | string | `"immediate"` or `"session_boundary"` |
-| `eval_improvement_threshold_pct` | float | Minimum improvement % to load adapter |
-| `eval_holdout_episodes` | int | Episodes reserved for evaluation (not trained on) |
-| `adapter_output_dir` | string | GGUF adapter output directory |
-| `dataset_output_dir` | string | JSONL dataset output directory |
-| `export_script_dir` | string | TensorRT shell script output directory |
-| `hf_model_path` | string | HuggingFace model weights for PEFT |
-| `python_venv` | string | Python venv with PEFT installed |
-| `convert_lora_script` | string | Path to `convert_lora_to_gguf.py` |
-
-### 15.13 `api` section (unchanged)
-
-`http_enabled`, `host`, `port`, `auth_enabled`, `api_key`, `stream_enabled`, `max_request_size_kb`, `request_timeout_seconds`.
-
-### 15.14 `logging` section (unchanged)
-
-`level` (debug/info/warn/error), `path`.
+| `venv_path` | string | Path to Python venv with Playwright installed |
+| `playwright_timeout_ms` | int | Default action timeout in ms |
+| `headless` | bool | Run browser without visible window |
+| `user_data_dir` | string | Browser profile directory for session persistence |
 
 ---
 
-## 16. CardinalAPI Reference
+## 19. CardinalAPI Reference
 
-`CardinalAPI` is the single entry point for all interfaces.
-**File:** `src/api/cardinal_api.h`
-
-### 16.1 Lifecycle
+### 19.1 Lifecycle
 
 ```cpp
-CardinalAPI api;
 CardinalVoidResult init(const std::string& config_path = "config.json");
 CardinalVoidResult shutdown();
 ```
 
-### 16.2 Session Management (unchanged)
+### 19.2 Session Management (unchanged)
 
 `create_session()`, `destroy_session()`, `reset_session()`, `get_session()`, `list_sessions()`.
 
-**v1.4.0:** `destroy_session()` now calls `on_session_boundary()` internally, which applies any pending LoRA adapter.
-
-### 16.3 Inference (unchanged signature)
+### 19.3 Inference (unchanged signature)
 
 ```cpp
 CardinalResult<ChatResponse> chat(const std::string& session_id,
@@ -782,45 +994,55 @@ CardinalResult<ChatResponse> chat_stream(const std::string&       session_id,
                                           const ApiStreamCallback& stream_cb);
 ```
 
-### 16.4 Agentic Inference (unchanged)
+### 19.4 Agentic Inference (unchanged)
 
 `agent(session_id, goal, max_iterations)`.
 
-### 16.5 Memory & Stats (unchanged)
+### 19.5 Memory & Stats (unchanged)
 
 `get_stats()`, `get_rules()`, `get_episodes()`, `run_scan()`, `run_maintenance()`.
 
-### 16.6 Training Export (unchanged)
+### 19.6 Self-Improvement (v1.4.0, unchanged)
 
-`export_training_data()`, `export_dry_run()`.
+`get_self_model_status()`, `reflect()`, `trigger_training(domain_hint)`, `on_session_boundary()`.
 
-### 16.7 Explainability (unchanged)
-
-`get_trace()`, `export_trace()`, `verify_trace()`, `get_public_key()`.
-
-### 16.8 Settings (unchanged)
-
-`get_settings()`, `update_settings()`, `set_setting()`, `reset_settings()`.
-
-### 16.9 Self-Improvement (v1.4.0) ← NEW
+### 19.7 Scheduler API (v1.5.0) ← NEW
 
 ```cpp
-// Returns current state of all three layers.
-CardinalResult<SelfImprovementStatus> get_self_model_status() const;
+CardinalResult<SchedulerStatus>              get_scheduler_status() const;
+CardinalResult<std::vector<ScheduledTask>>   list_tasks() const;
+CardinalResult<ScheduledTask>                get_task(const std::string& task_id) const;
+CardinalResult<TaskParseResult>              create_task(const std::string& nl_description,
+                                                          const std::string& session_id = "");
+CardinalResult<std::string>                  create_task_direct(const ScheduledTask& task);
+CardinalVoidResult                           update_task(const ScheduledTask& task);
+CardinalVoidResult                           delete_task(const std::string& task_id);
+CardinalVoidResult                           enable_task(const std::string& task_id);
+CardinalVoidResult                           disable_task(const std::string& task_id);
+CardinalResult<std::string>                  run_task_now(const std::string& task_id);
+CardinalResult<std::vector<TaskRun>>         get_task_history(const std::string& task_id,
+                                                               int limit = 50) const;
+CardinalResult<std::vector<TaskRun>>         get_recent_runs(int limit = 100) const;
+CardinalResult<std::vector<TaskActionLog>>   get_run_action_logs(const std::string& run_id) const;
+```
 
-// Trigger on-demand Layer 2 reflection pass (synchronous).
-CardinalResult<ReflectionResult> reflect();
+### 19.8 Computer Use API (v1.5.0) ← NEW
 
-// Post Layer 3 training request to background thread (async, returns immediately).
-CardinalResult<bool> trigger_training(const std::string& domain_hint = "");
-
-// Called at session boundaries to apply pending LoRA adapters.
-void on_session_boundary();
+```cpp
+CardinalResult<ScreenInfo>     get_computer_status() const;
+CardinalResult<Screenshot>     take_screenshot(bool analyze = true,
+                                                const std::string& prompt = "");
+CardinalResult<std::string>    computer_click(int x, int y,
+                                               const std::string& description = "");
+CardinalResult<std::string>    computer_type(const std::string& text,
+                                              const std::string& key = "");
+CardinalResult<ShellResult>    computer_shell(const std::string& command,
+                                               int timeout_seconds = 0);
 ```
 
 ---
 
-## 17. HTTP API Reference
+## 20. HTTP API Reference
 
 Base URL: `http://127.0.0.1:8080`
 Auth: `Authorization: Bearer <api_key>` (except `/api/health`)
@@ -830,293 +1052,314 @@ Auth: `Authorization: Bearer <api_key>` (except `/api/health`)
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/health` | Health check (no auth) |
-| POST | `/api/chat` | Send message, get response or SSE stream |
-| POST | `/api/reset` | Reset session history |
-| GET | `/api/stats` | System stats |
-| GET | `/api/rules` | Rule store contents |
-| GET | `/api/episodes` | Episode query |
-| POST | `/api/scan` | Run contradiction scan |
-| POST | `/api/maintenance` | Run maintenance cycle |
-| GET | `/api/settings` | Get current settings |
-| POST | `/api/settings` | Update settings |
-| POST | `/api/export` | Export training data (Alpaca JSONL) |
+| POST | `/api/chat` | Chat with optional SSE stream |
 | POST | `/api/sessions` | Create session |
 | DELETE | `/api/sessions/:id` | Destroy session |
-| POST | `/api/sessions/:id/reset` | Reset session |
+| POST | `/api/sessions/:id/reset` | Reset session history |
+| GET | `/api/stats` | System statistics |
+| GET | `/api/rules` | Rule store contents |
+| GET | `/api/episodes` | Episode query |
+| POST | `/api/scan` | Contradiction scan |
+| POST | `/api/maintenance` | Maintenance cycle |
+| GET | `/api/settings` | Get settings |
+| POST | `/api/settings` | Update settings |
+| POST | `/api/export` | Export training data (Alpaca JSONL) |
+| GET | `/api/self_model` | Self-model status (v1.4.0) |
+| POST | `/api/reflect` | Trigger reflection (v1.4.0) |
+| POST | `/api/train` | Trigger training (v1.4.0) |
 
-### New endpoints (v1.4.0)
+### Scheduler endpoints (v1.5.0)
 
-#### `GET /api/self_model`
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/scheduler/status` | Engine status, run counts |
+| GET | `/api/scheduler/tasks` | List all tasks |
+| POST | `/api/scheduler/tasks` | Create task (NL `description` field OR direct JSON) |
+| GET | `/api/scheduler/tasks/:id` | Get task by ID |
+| PUT | `/api/scheduler/tasks/:id` | Update task |
+| DELETE | `/api/scheduler/tasks/:id` | Delete task |
+| POST | `/api/scheduler/tasks/:id/run` | Run task immediately |
+| POST | `/api/scheduler/tasks/:id/enable` | Enable task |
+| POST | `/api/scheduler/tasks/:id/disable` | Disable task |
+| GET | `/api/scheduler/tasks/:id/history` | Run history (`?limit=N`) |
+| GET | `/api/scheduler/runs` | Recent runs across all tasks (`?limit=N`) |
+| GET | `/api/scheduler/runs/:id/actions` | Action log for a run |
 
-Returns the current `SelfImprovementStatus`.
+**Create task from NL:**
+```bash
+curl -X POST http://127.0.0.1:8080/api/scheduler/tasks \
+  -H "Authorization: Bearer secret_api_key" \
+  -H "Content-Type: application/json" \
+  -d '{"description": "search for AI news every morning at 7am and save to a file"}'
+```
 
 **Response:**
 ```json
 {
-  "self_model_enabled": true,
-  "weakest_domain": "factual",
-  "strongest_domain": "mathematical",
-  "total_domain_stats": 5,
-  "meta_cognition_enabled": true,
-  "total_reflections": 3,
-  "total_corrective_rules": 7,
-  "last_reflection_at": "2026-05-15T14:23:11Z",
-  "training_enabled": true,
-  "total_training_runs": 1,
-  "last_training_at": "2026-05-15T12:00:00Z",
-  "active_adapter_path": "data/training/adapters/run_1747310400000.gguf",
-  "last_improvement_pct": 6.3
+  "success": true,
+  "confidence": 0.91,
+  "task": {
+    "id": "3f8a1b2c-...",
+    "name": "Daily AI News Search",
+    "enabled": true,
+    "trigger": {"type": "cron", "cron_expression": "0 7 * * *"},
+    "action": {"type": "agent_run", "goal": "search for AI news", "output_target": "file"}
+  }
 }
 ```
 
-#### `POST /api/reflect`
+**Create task directly (no NL parsing):**
+```bash
+curl -X POST http://127.0.0.1:8080/api/scheduler/tasks \
+  -H "Authorization: Bearer secret_api_key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Hourly maintenance",
+    "trigger": {"type": "interval", "interval_seconds": 3600},
+    "action": {"type": "maintenance"}
+  }'
+```
 
-Triggers an on-demand Layer 2 reflection pass. Runs synchronously — may take several seconds.
+### Computer Use endpoints (v1.5.0)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/computer/status` | Display server, resolution |
+| POST | `/api/computer/screenshot` | Capture screen |
+| POST | `/api/computer/click` | Click by coords or description |
+| POST | `/api/computer/type` | Type text or key combo |
+| POST | `/api/computer/shell` | Run shell command |
+
+**Screenshot:**
+```bash
+curl -X POST http://127.0.0.1:8080/api/computer/screenshot \
+  -H "Authorization: Bearer secret_api_key" \
+  -H "Content-Type: application/json" \
+  -d '{"analyze": true, "prompt": "What applications are open?"}'
+```
 
 **Response:**
 ```json
 {
-  "ran": true,
-  "trigger": "manual",
-  "episodes_analyzed": 40,
-  "failures_analyzed": 8,
-  "rules_committed": 2,
-  "duration_ms": 3142,
-  "timestamp": "2026-05-15T14:23:11Z",
-  "error_message": "",
-  "findings": [
-    {
-      "domain": "factual",
-      "pattern": "Hallucinating source citations when confidence is marginal",
-      "recommendation": "Hedge claims about specific sources unless verified",
-      "confidence": 0.84,
-      "timestamp": "2026-05-15T14:23:11Z"
-    }
-  ]
+  "path": "data/screenshots/screen_20260524_165312.png",
+  "width": 1920, "height": 1080,
+  "analyzed": true,
+  "description": "The screen shows a terminal window with cardinal running..."
 }
 ```
 
-If `ran=false`, `error_message` explains why (e.g. not enough failure episodes, reflection already in progress).
+---
 
-#### `POST /api/train`
+## 21. Settings Manager (unchanged)
 
-Posts a Layer 3 training request to the background thread. Returns immediately.
-
-**Request body (optional):**
-```json
-{"domain_hint": "factual"}
-```
-
-`domain_hint` is optional. If empty, `CurriculumBuilder` selects the target domain automatically.
-
-**Response:**
-```json
-{
-  "accepted": true,
-  "domain_hint": "",
-  "message": "Training request posted to background thread"
-}
-```
-
-`accepted=false` means training is disabled in config or a cycle is already running.
+Runtime-mutable settings propagate immediately. `SettingsManager` owns retriever mode/weights, verifier mode, rule thresholds, sampling parameters, log level, agent limits.
 
 ---
 
-## 18. Settings Manager (unchanged)
+## 22. Session Manager (unchanged)
 
-Runtime-mutable settings propagate immediately. `SettingsManager` owns `EpisodicRetriever` mode/weights, verifier mode, rule thresholds, sampling parameters, log level, agent limits.
-
----
-
-## 19. Session Manager (unchanged)
-
-`SessionManager` owns `ConversationSession` objects. Each session tracks `turn_count`, `history`, `working_memory` (agentic), timestamps, and provides `trim_to_token_budget()`.
-
-**v1.4.0:** `destroy_session()` now calls `on_session_boundary()` before returning, which applies pending LoRA adapters.
+`SessionManager` owns `ConversationSession` objects. Each tracks `turn_count`, `history`, `working_memory`, timestamps. `destroy_session()` calls `on_session_boundary()` for LoRA adapter application.
 
 ---
 
-## 20. Type Reference
+## 23. Type Reference
 
-All public types in `src/api/cardinal_types.h`. Pybind11-friendly.
+All public types in `src/api/cardinal_types.h`.
 
-### New types (v1.4.0) — `src/self_model/self_model_types.h`
+### New types (v1.5.0) — `src/scheduler/scheduler_types.h`
 
-#### `DomainStats`
+**`TriggerType` enum:** `CRON`, `INTERVAL`, `CONDITION`, `STARTUP`, `IDLE`, `MANUAL`
 
+**`TriggerSpec`:**
 ```cpp
-struct DomainStats {
-    std::string domain;
-    float avg_confidence;
-    float contradiction_rate;
-    float uncertainty_rate;
-    float rule_commit_rate;
-    int   total_inferences;
-    int   total_contradictions;
-    int   total_uncertainties;
-    std::string last_updated;
-    float weakness_score() const;  // derived
+struct TriggerSpec {
+    TriggerType type = TriggerType::MANUAL;
+    std::string cron_expression;
+    int         interval_seconds = 0;
+    std::string condition_expr;
+    int         idle_minutes     = 30;
 };
 ```
 
-#### `SelfModelSnapshot`
+**`TaskActionType` enum:** `AGENT_RUN`, `CHAT`, `REFLECT`, `TRAIN`, `SELF_IMPROVEMENT`, `MAINTENANCE`, `EXPORT`, `SHELL`, `WEBHOOK`
 
+**`OutputTarget` enum:** `MEMORY`, `FILE`, `WEBHOOK`, `DISCARD`, `BOTH`
+
+**`TaskAction`:**
 ```cpp
-struct SelfModelSnapshot {
-    std::vector<DomainStats>        domain_stats;
-    std::vector<ReasoningTypeStats> reasoning_stats;
-    std::vector<PerformanceTrend>   trends;
-    std::string weakest_domain()   const;
-    std::string strongest_domain() const;
-    std::string format_for_prompt(int max_chars = 500) const;
+struct TaskAction {
+    TaskActionType type = TaskActionType::AGENT_RUN;
+    std::string    goal;
+    int            max_iterations = 0;
+    std::string    domain_hint;
+    std::string    shell_command;
+    std::string    webhook_url;
+    OutputTarget   output_target = OutputTarget::MEMORY;
+    std::string    output_file;
 };
 ```
 
-#### `ReflectionFinding`
+**`ScheduledTask`:** (see §11.2)
 
+**`TaskRunStatus` enum:** `PENDING`, `RUNNING`, `SUCCESS`, `FAILED`, `TIMEOUT`, `CANCELLED`
+
+**`TaskRun`:**
 ```cpp
-struct ReflectionFinding {
-    std::string domain;
-    std::string pattern;
-    std::string recommendation;
-    float       confidence;
+struct TaskRun {
+    std::string    run_id;
+    std::string    task_id;
+    std::string    task_name;
+    TaskRunStatus  status = TaskRunStatus::PENDING;
+    std::string    started_at;
+    std::string    finished_at;
+    std::string    result_summary;
+    std::string    error_message;
+    int            duration_ms = 0;
+    std::string    output_path;
+    std::string    session_id;
+    std::vector<TaskActionLog> action_log;
+};
+```
+
+**`TaskActionLog`:**
+```cpp
+struct TaskActionLog {
+    int         sequence = 0;
+    std::string action_type;
+    std::string description;
+    std::string input_summary;
+    std::string output_summary;
+    bool        success               = false;
+    bool        required_confirmation = false;
+    bool        confirmation_granted  = false;
+    int         duration_ms           = 0;
     std::string timestamp;
 };
 ```
 
-#### `ReflectionResult`
-
+**`TaskParseResult`:**
 ```cpp
-struct ReflectionResult {
-    bool        ran;
-    std::string trigger;
-    int         episodes_analyzed;
-    int         failures_analyzed;
-    std::vector<ReflectionFinding> findings;
-    int         rules_committed;
-    int         duration_ms;
-    std::string timestamp;
-    std::string error_message;
+struct TaskParseResult {
+    bool          success    = false;
+    float         confidence = 0.0f;
+    ScheduledTask task;
+    std::string   error_message;
+    std::string   clarification_needed;
 };
 ```
 
-#### `SelfImprovementStatus`
-
+**`SchedulerStatus`:**
 ```cpp
-struct SelfImprovementStatus {
-    bool        self_model_enabled;
-    std::string weakest_domain;
-    std::string strongest_domain;
-    int         total_domain_stats;
-    bool        meta_cognition_enabled;
-    int         total_reflections;
-    int         total_corrective_rules;
-    std::string last_reflection_at;
-    bool        training_enabled;
-    int         total_training_runs;
-    std::string last_training_at;
-    std::string active_adapter_path;
-    float       last_improvement_pct;
+struct SchedulerStatus {
+    bool        enabled;
+    bool        running;
+    int         total_tasks;
+    int         enabled_tasks;
+    int         total_runs;
+    int         successful_runs;
+    int         failed_runs;
+    std::string current_task_id;
+    std::string current_task_name;
+    std::string last_run_at;
+    std::string next_scheduled_at;
 };
 ```
 
-#### `TrainingExample` (merged, canonical definition)
+### New types (v1.5.0) — `src/computer/computer_types.h`
 
-```cpp
-struct TrainingExample {
-    std::string instruction;    // user message / task
-    std::string input;          // additional context (often empty)
-    std::string output;         // target response
-    std::string domain;         // source reasoning domain
-    float       confidence;     // source episode confidence
-    std::string episode_id;     // provenance
-    std::string reasoning_type; // e.g. "causal"
-    std::string timestamp;      // ISO-8601
-    std::string source;         // "episode" | "rule"
-};
-```
+**`DisplayServer` enum:** `X11`, `WAYLAND`, `HEADLESS`
 
-### Existing types (unchanged)
+**`Point`:** `int x, y`
 
-`CardinalStatus`, `CardinalResult<T>`, `CardinalVoidResult`, `ChatResponse`, `FeelingInfo`, `SessionInfo`, `RuleInfo`, `EpisodeInfo`, `SystemStats`, `ExportInfo`, `ScanResult`, `StreamToken`, `VisionResult`.
+**`ScreenRegion`:** `int x, y, width, height`
+
+**`ScreenInfo`:** `width`, `height`, `scale_factor`, `server`, `display_var`
+
+**`Screenshot`:** `path`, `width`, `height`, `timestamp`, `analyzed`, `description`, `region`
+
+**`ImageMetadata`:** `width`, `height`, `file_size`, `format`, `source`, `origin`, `cache_path`
+
+**`MouseButton` enum:** `LEFT`, `RIGHT`, `MIDDLE`
+
+**`BrowserActionType` enum:** `NAVIGATE`, `CLICK`, `CLICK_TEXT`, `TYPE`, `SCROLL`, `GET_CONTENT`, `SCREENSHOT`, `EXECUTE_JS`, `NEW_TAB`, `CLOSE_TAB`, `BACK`, `FORWARD`, `RELOAD`
+
+**`BrowserResult`:** `success`, `error_message`, `url`, `content`, `screenshot_path`, `duration_ms`
+
+**`ShellResult`:** `success`, `exit_code`, `stdout_text`, `stderr_text`, `duration_ms`, `command`
+
+**`FileOpResult`:** `success`, `error_message`, `entries` (`vector<FileEntry>`), `dest_path`
+
+**`FileEntry`:** `name`, `path`, `is_dir`, `size_bytes`, `permissions`, `modified_at`
+
+**`SystemState`:** `volume_pct`, `muted`, `brightness_pct`, `wifi_enabled`, `wifi_ssid`, `bluetooth_enabled`, `battery_pct`, `battery_charging`
+
+**`EmailQuery`:** `folder`, `subject_contains`, `from_contains`, `unread_only`, `max_results`
+
+**`EmailMessage`:** `id`, `message_id`, `from`, `to`, `subject`, `date`, `body_text`, `body_html`, `unread`
+
+**`EmailSendRequest`:** `to` (vector), `cc` (vector), `subject`, `body`, `html_body`
+
+**`AppInfo`:** `window_id`, `name`, `title`, `pid`, `focused`
+
+**`AtSpiNode`:** `role`, `name`, `bounds` (x,y,w,h), `states` (vector), `children` (vector)
+
+### Existing types (unchanged from v1.4.0)
+
+`CardinalStatus`, `CardinalResult<T>`, `CardinalVoidResult`, `ChatResponse`, `FeelingInfo`, `SessionInfo`, `RuleInfo`, `EpisodeInfo`, `SystemStats`, `ExportInfo`, `ScanResult`, `StreamToken`, `DomainStats`, `SelfModelSnapshot`, `ReflectionFinding`, `ReflectionResult`, `SelfImprovementStatus`, `TrainingExample`.
 
 ---
 
-## 21. Error Handling
+## 24. Error Handling
 
-No C++ exceptions cross the `CardinalAPI` boundary. All internal exceptions are caught and converted to `CardinalResult<T>`.
+No C++ exceptions cross the `CardinalAPI` boundary. All internal exceptions caught and converted to `CardinalResult<T>` or `CardinalVoidResult`.
 
-**Non-fatal paths:** retrieval failure, neural verifier failure, contradiction check failure, tool execution failure, JSONL migration parse errors, reflection pass LLM failure, training subprocess non-zero exit, adapter load failure (improvement below threshold).
+**Non-fatal paths:** retrieval failure, neural verifier failure, tool execution failure, reflection pass LLM failure, training subprocess non-zero exit, adapter load failure below threshold, screenshot tool missing, browser process crash, shell command blocked, file path not allowed, email auth failure.
 
 **Fatal paths** (cause `init()` to fail): missing config/model/grammar files, SQLite error on episode DB open, explainability key generation failure.
 
-**Self-improvement errors are non-fatal by design.** If `SelfImprovementLoop::start()` encounters an error constructing Layer 3 (e.g. training disabled or venv missing), it logs the error and continues with Layers 1 and 2 only. If the SelfModel DB fails to open, Layer 1 is disabled and inference continues normally. The system degrades gracefully rather than failing to start.
+**v1.5.0 — Graceful degradation:**
+- `computer_use.enabled=true` but display not detected → computer use controllers not initialised; `check_computer_use()` returns `COMPUTER_USE_ERROR`; tools not registered; rest of system unaffected
+- `scheduler.enabled=true` but SQLite fails to open → scheduler not started; `check_scheduler()` returns `SCHEDULER_ERROR`; rest of system unaffected
+- Browser venv missing → `browser` tool not registered (guarded by `venv_path.empty()` check)
+- Email disabled → `email` tool not registered
 
 ---
 
-## 22. Offline Builds & Vendoring
+## 25. Offline Builds & Vendoring
 
-Full offline builds with vendored dependencies.
-`vendor/` contains: `llama.cpp`, `nlohmann_json`, `cpp-httplib`, `muparser`.
-System dependencies installed via `apt`.
+All vendor dependencies cloned manually — no git submodules.
 
-CMake detects `mtmd` from `vendor/llama.cpp/tools/mtmd/` and sets `CARDINAL_MTMD_AVAILABLE` automatically.
+```
+vendor/
+    llama.cpp/          git clone https://github.com/ggerganov/llama.cpp
+    nlohmann_json/      git clone https://github.com/nlohmann/json
+    cpp-httplib/        git clone https://github.com/yhirose/cpp-httplib
+    muparser/           git clone https://github.com/beltoforion/muparser
+    tokenizers-cpp/     git clone https://github.com/mlc-ai/tokenizers-cpp
+```
 
-**v1.4.0:** No new vendored dependencies. The training pipeline uses system Python + PEFT (installed in the venv). `convert_lora_to_gguf.py` is taken from `vendor/llama.cpp/` directly.
+CMake auto-detects `mtmd` from `vendor/llama.cpp/tools/mtmd/` and sets `CARDINAL_MTMD_AVAILABLE`.
+
+**v1.5.0:** No new vendored C++ dependencies. Playwright (Python) is installed into `cardinal-browser-venv`. Email dependencies (google-auth etc.) optionally installed into the same venv.
 
 ---
 
-## 23. Module Reference
+## 26. Module Reference
 
-### 23.1 VisionEncoder (v1.3.0, unchanged)
+### 26.1 VisionEncoder (v1.3.0)
 
 ```cpp
 class VisionEncoder {
-    Result<> load();
+    void load();
     bool is_ready() const;
-    Result<VisionResult> encode(const std::string& image_path);
+    void unload();
+    VisionResult encode(const std::string& image_path,
+                        const std::string& prompt,
+                        const ImageMetadata& metadata) const;
 };
 ```
 
-### 23.2 VisionCache (v1.3.0, unchanged)
-
-```cpp
-class VisionCache {
-    Result<> init();
-    Result<std::string> get_or_download(const std::string& url);
-    void set_ttl_hours(int hours);
-};
-```
-
-### 23.3 SelfModel (v1.4.0)
-
-```cpp
-class SelfModel {
-    void open();
-    void close();
-    void record_inference(domain, reasoning_type, confidence,
-                          contradiction, uncertainty, rule_committed);
-    SelfModelSnapshot get_snapshot() const;
-    std::vector<DomainStats> get_weakest_domains(int n = 3) const;
-    std::vector<DomainStats> get_all_domain_stats() const;
-    std::string format_for_prompt() const;
-    int total_records() const;
-};
-```
-
-### 23.4 MetaCognition (v1.4.0)
-
-```cpp
-class MetaCognition {
-    ReflectionResult on_inference(domain, contradiction, uncertainty);
-    ReflectionResult reflect(const std::string& trigger = "manual");
-    int total_reflections() const;
-    int total_corrective_rules() const;
-    std::string last_reflection_at() const;
-};
-```
-
-### 23.5 SelfImprovementLoop (v1.4.0)
+### 26.2 SelfImprovementLoop (v1.4.0)
 
 ```cpp
 class SelfImprovementLoop {
@@ -1132,62 +1375,129 @@ class SelfImprovementLoop {
 };
 ```
 
-### 23.6 ITrainingBackend (v1.4.0)
+### 26.3 SchedulerEngine (v1.5.0)
 
 ```cpp
-class ITrainingBackend {
-    virtual std::string name() const = 0;
-    virtual bool can_train_locally() const = 0;
-    virtual TrainingResult prepare(dataset, lora_cfg) = 0;
-    virtual TrainingResult train(dataset, lora_cfg, progress_cb) = 0;
-    virtual TrainingResult evaluate(adapter_path, eval_episodes) = 0;
-    virtual TrainingResult load_adapter(adapter_path) = 0;
-    virtual void unload_adapter() = 0;
-    virtual bool has_adapter() const = 0;
-    virtual std::string active_adapter_path() const = 0;
-    TrainingResult run_full_cycle(...);  // default implementation
+class SchedulerEngine {
+    void start();
+    void stop();
+    bool is_running() const;
+    void on_inference();  // updates idle tracker
+
+    TaskParseResult create_task_from_nl(const std::string& nl,
+                                         const std::string& session_id = "");
+    std::string     create_task(ScheduledTask task);
+    bool            update_task(const ScheduledTask& task);
+    bool            delete_task(const std::string& task_id);
+    std::optional<ScheduledTask> get_task(const std::string& task_id) const;
+    std::vector<ScheduledTask>   list_tasks() const;
+    bool            enable_task(const std::string& task_id);
+    bool            disable_task(const std::string& task_id);
+    std::string     run_task_now(const std::string& task_id);
+
+    std::vector<TaskRun>       get_task_history(const std::string& task_id, int limit) const;
+    std::vector<TaskRun>       get_recent_runs(int limit) const;
+    std::vector<TaskActionLog> get_run_action_logs(const std::string& run_id) const;
+
+    SchedulerStatus get_status() const;
+};
+```
+
+### 26.4 SchedulerParser (v1.5.0)
+
+```cpp
+class SchedulerParser {
+    // pipeline may be nullptr — parse() fails gracefully
+    explicit SchedulerParser(InferencePipeline* pipeline,
+                              const CardinalConfig& config,
+                              float min_confidence = 0.70f);
+
+    TaskParseResult parse(const std::string& nl_description,
+                          const std::string& session_id = "");
+
+    TaskParseResult parse_json(const std::string& json_str,
+                               const std::string& session_id = "");
+
+    // Public static — called directly by SchedulerEngine::create_task_from_nl()
+    static TaskParseResult extract_from_json(const std::string& model_output,
+                                              const std::string& session_id,
+                                              float              min_confidence);
+
+    static std::string build_system_prompt();
+    static std::string build_user_message(const std::string& nl_description);
+};
+```
+
+### 26.5 DisplayDetector (v1.5.0)
+
+```cpp
+class DisplayDetector {
+    void detect();
+    bool is_x11()      const;
+    bool is_wayland()  const;
+    bool is_headless() const;
+    DisplayServer server() const;
+    ScreenInfo    info()   const;
+    bool has_scrot() const;
+    bool has_grim()  const;
+};
+```
+
+### 26.6 BrowserController (v1.5.0)
+
+```cpp
+class BrowserController {
+    bool start();
+    void stop();
+    bool is_running() const;
+    BrowserResult execute(const BrowserAction& action);
+    BrowserResult navigate(const std::string& url);
+    BrowserResult click(const std::string& selector);
+    BrowserResult click_text(const std::string& visible_text);
+    BrowserResult type(const std::string& selector, const std::string& text);
+    BrowserResult get_content();
+    BrowserResult screenshot(const std::string& save_path = "");
+    BrowserResult execute_js(const std::string& js);
+    bool is_domain_allowed(const std::string& url) const;
 };
 ```
 
 ---
 
-## 24. Threading Model
+## 27. Threading Model
 
 | Thread | Owner | Responsibility |
 |--------|-------|----------------|
 | Main / inference | CardinalAPI | `chat()`, `agent()`, all user-facing calls |
 | HTTP server | HttpServer | Request handling, SSE streaming |
 | Training | SelfImprovementLoop | Layer 3 training cycle (background) |
+| Scheduler engine | SchedulerEngine | Trigger evaluation + task dispatch |
+| Task execution | SchedulerEngine (detached) | Each task runs in a detached thread |
 
-**Inference thread:**
-- `on_inference()` is called synchronously after every `run_post_inference()`.
-- Layer 1: lock-free SQLite upsert (own internal mutex in SelfModel).
-- Layer 2: atomic counter increment + may run synchronous reflection pass if trigger fires (acquires `reflect_mutex_` with `try_to_lock` — aborts if already reflecting).
-- Layer 3: atomic counter increment + may `post_training_request()` (acquires `training_mutex_` briefly via `lock_guard`).
+### Lock ordering
 
-**Training thread:**
-- Sleeps on `condition_variable`, wakes on trigger or 60-second poll.
-- All training operations (JSONL write, subprocess, adapter load) happen here.
-- Never blocks the inference thread.
-
-**Session boundary (inference thread):**
-- `on_session_boundary()` calls `AdapterEvaluator::apply_pending_adapter()`.
-- Acquires `pending_mutex_` briefly to read/clear `pending_adapter_path_`.
-- Calls `backend_.load_adapter()` which acquires `trainer_mutex_` in `LlamaCppTrainer`.
-- Designed to be fast — called between sessions, no inference is active.
-
-**Lock ordering (no deadlocks):**
 ```
-api_mutex_ > session_mutex_ > inference_mutex_
-                                 > self_model.mutex_
-                                 > meta_cognition.reflect_mutex_
-                                 > meta_cognition.window_mutex_
-                                 > training_mutex_ > trainer_mutex_ > pending_mutex_
+api_mutex_
+  > session_mutex_
+  > inference_mutex_
+      > self_model.mutex_
+      > meta_cognition.reflect_mutex_
+      > training_mutex_ > trainer_mutex_ > pending_mutex_
+  > scheduler cv_mutex_
+      > scheduler idle_mutex_
+      > scheduler status_mutex_
+      > scheduler sim_mutex_
 ```
+
+### Scheduler thread safety
+
+`SchedulerEngine::on_inference()` is called on the inference thread and only acquires `idle_mutex_` briefly to update `last_inference_at_`. The engine thread never blocks the inference thread — task dispatch goes to a detached thread.
+
+`SchedulerEngine::status_mutex_` guards current task name/ID, run counts, and timing strings — read by HTTP handlers, written by dispatch threads.
 
 ---
 
-## 25. Lifecycle and Startup Sequence (v1.4.0)
+## 28. Lifecycle and Startup Sequence (v1.5.0)
 
 ```
 main()
@@ -1198,52 +1508,68 @@ main()
   +-- CardinalAPI::init()
         |
         +-- ILLMBackend (LlamaCppBackend or TensorRTBackend)
-        |     +-- load_model()
-        |     +-- create_context() × 2 (pass1, pass2)
+        |     +-- load_model(), create_context() × 2 (pass1, pass2)
         |
         +-- Memory subsystems
         |     +-- RuleStore::load()
         |     +-- KnowledgeGraph::load()
-        |     +-- EpisodicMemory::init()
-        |     +-- EpisodicStorage::open() → migrate from JSONL if needed
+        |     +-- EpisodicMemory::open()
+        |     +-- EpisodicStorage::open()  → JSONL migration if needed
         |     +-- EpisodicRetriever::build_index()
         |
         +-- Verifier pipeline
-        |     +-- SymbolicEngine::init() → SWI-Prolog
+        |     +-- SymbolicEngine::init()  → SWI-Prolog
         |     +-- RuleExtractor::init()
-        |     +-- NeuralVerifier::init() (if enabled)
+        |     +-- NeuralVerifier::init()  (if enabled)
         |     +-- ConsistencyChecker::init()
         |
         +-- InferencePipeline::init()
         |
         +-- Tools & Agent
-        |     +-- ToolRegistry::register_all()
+        |     +-- ToolRegistry::init()    → registers all base tools
         |     +-- ToolExecutor::init()
         |     +-- AgentExecutor::init()
         |
         +-- Vision (v1.3.0)
         |     +-- VisionCache::init()
-        |     +-- VisionEncoder::load() → ready or disabled
+        |     +-- VisionEncoder::load()   → ready or disabled
         |
         +-- Explainability
         |     +-- AuditLog::open()
-        |     +-- ExplainabilityExporter::init()
         |     +-- key generation if auto_generate_keys=true
         |
         +-- API layer
-        |     +-- TrainingExporter::init()
-        |     +-- SettingsManager::init()
-        |     +-- SessionManager::init()
+        |     +-- TrainingExporter, SettingsManager, SessionManager
         |
-        +-- Self-Improvement (v1.4.0)        ← NEW
-              +-- SelfImprovementLoop::start()
-                    +-- SelfModel::open()    → creates self_model.db if needed
-                    +-- MetaCognition::init()
-                    +-- TrainingFactory::create() → LlamaCppTrainer or TensorRTTrainer
-                    +-- CurriculumBuilder::init()
-                    +-- DatasetCurator::init()
-                    +-- AdapterEvaluator::init()
-                    +-- training_thread_.start()
+        +-- Self-Improvement (v1.4.0)
+        |     +-- SelfImprovementLoop::start()
+        |           +-- SelfModel::open()
+        |           +-- MetaCognition::init()
+        |           +-- TrainingFactory::create()
+        |           +-- training_thread_.start()
+        |
+        +-- Scheduler (v1.5.0)
+        |     +-- SchedulerEngine constructed with SchedulerDeps
+        |           (agent_executor, pipeline, self_improvement,
+        |            episodic, sessions, inference_busy_fn)
+        |     +-- SchedulerEngine::start()
+        |           +-- SchedulerStore::open()  → creates scheduler.db if needed
+        |           +-- Fires STARTUP tasks immediately
+        |           +-- engine_thread_.start()
+        |     +-- ToolRegistry registers schedule_task tool
+        |
+        +-- Computer Use (v1.5.0)
+        |     +-- DisplayDetector::detect()  → X11 / Wayland / headless
+        |     +-- ScreenReader constructed with DisplayDetector + VisionEncoder
+        |     +-- InputController, AppController
+        |     +-- BrowserController (lazy start — first use spawns helper process)
+        |     +-- ShellExecutor, FileManager, SystemController
+        |     +-- EmailController, AtSpiReader
+        |     +-- ToolRegistry registers screenshot, click, type_text, ...
+        |     +-- ToolExecutor wired via set_screen_reader(), set_scheduler(), ...
+        |
+        +-- initialized_.store(true)
+        +-- LOG_INFO("CardinalAPI initialized — N tools registered")
 
   +-- HttpServer::start() (if http_enabled)
   +-- interactive loop
@@ -1253,22 +1579,27 @@ main()
 ```
 CardinalAPI::shutdown()
   |
-  +-- SelfImprovementLoop::stop()
-  |     +-- training_cv_.notify() with stop_requested_=true
-  |     +-- training_thread_.join()  ← waits for current cycle to finish
-  |     +-- SelfModel::close()       ← WAL checkpoint + close
+  +-- scheduler_->stop()      ← stop before subsystems it depends on
+  |     +-- notify CV with stop_requested_=true
+  |     +-- engine_thread_.join()  ← waits for current tick/dispatch
+  |     +-- SchedulerStore::close()
   |
-  +-- HttpServer::stop()
-  +-- AgentExecutor::shutdown()
-  +-- ConsistencyChecker::shutdown()
+  +-- browser_controller_->stop()  ← shut down Playwright helper process
+  |
+  +-- self_improvement_->stop()
+  |     +-- training_thread_.join()
+  |     +-- SelfModel::close()  ← WAL checkpoint
+  |
+  +-- sessions_->destroy_all()
   +-- EpisodicStorage::close()
+  +-- AuditLog::close()
   +-- RuleStore::save()
   +-- VisionEncoder::unload()
   +-- ILLMBackend::unload()
 ```
 
-The training thread is always joined before any subsystem it depends on (storage, rule_store, backend) is shut down. This is guaranteed by the destruction order of `unique_ptr` members in `CardinalAPI` — `self_improvement_` is declared last among subsystems in the header, so it is destroyed first.
+**Destruction order is guaranteed by `unique_ptr` member declaration order in `CardinalAPI`.** `scheduler_` and computer use controllers are declared after `self_improvement_`, which is declared after all foundation subsystems. C++ destructs members in reverse declaration order, so foundation subsystems outlive everything that depends on them.
 
 ---
 
-*This documentation reflects Cardinal v1.4.0. The source of truth is always the source code.*
+*This documentation reflects Cardinal v1.5.0. The source of truth is always the source code.*

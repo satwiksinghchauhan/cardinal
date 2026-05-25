@@ -1,7 +1,5 @@
-// SPDX-License-Identifier: AGPL-3.0-only
-// SPDX-FileCopyrightText: Copyright (C) 2026 Satwik Singh (Cardinal AGI)
 // =============================================================================
-// Cardinal - Main Entry Point (v1.4.0)
+// Cardinal - Main Entry Point (v1.5.0)
 // File: src/main.cpp
 // =============================================================================
 
@@ -9,6 +7,7 @@
 #include "api/http_server.h"
 #include "utils/config_loader.h"
 #include "utils/logger.h"
+#include "computer/computer_types.h"
 
 #include <iostream>
 #include <string>
@@ -28,7 +27,7 @@ static void print_banner(bool http_enabled,
 {
     std::cout << "\n";
     std::cout << "  +===========================================+\n";
-    std::cout << "  |         C A R D I N A L  v1.4.0           |\n";
+    std::cout << "  |         C A R D I N A L  v1.5.0           |\n";
     std::cout << "  |    Neurosymbolic AGI Architecture         |\n";
     std::cout << "  +===========================================+\n";
     std::cout << "\n";
@@ -43,13 +42,15 @@ static void print_banner(bool http_enabled,
     std::cout << "    /stats          -- show memory and verifier stats\n";
     std::cout << "    /export         -- export training data to JSONL\n";
     std::cout << "    /scan           -- run full contradiction scan\n";
-    std::cout << "    /self_model     -- show self-improvement status (Layer 1-3)\n";
-    std::cout << "    /reflect        -- trigger meta-cognition (Layer 2)\n";
-    std::cout << "    /train [domain] -- trigger LoRA fine-tuning (Layer 3)\n";
     std::cout << "    /http start     -- start HTTP server\n";
     std::cout << "    /http stop      -- stop HTTP server\n";
+    std::cout << "    /self_model     -- show self-improvement status\n";
+    std::cout << "    /reflect        -- trigger meta-cognition (Layer 2)\n";
+    std::cout << "    /train [domain] -- trigger LoRA fine-tuning (Layer 3)\n";
+    std::cout << "    /scheduler      -- show scheduler status\n";
+    std::cout << "    /tasks          -- list scheduled tasks\n";
+    std::cout << "    /computer       -- show computer use status\n";
     std::cout << "\n";
-    std::cout << "  Cardinal is ready. Type your message.\n\n";
 }
 
 // =============================================================================
@@ -70,12 +71,12 @@ static void print_stats(cardinal::CardinalAPI& api) {
     std::cout << "  Index size:     " << s.memory.index_size         << "\n";
     std::cout << "  Vocabulary:     " << s.memory.vocabulary_size    << " terms\n";
     std::cout << "\n  -- Verifier --\n";
-    std::cout << "  Checks:         " << s.verifier.total_checks          << "\n";
-    std::cout << "  Extracted:      " << s.verifier.total_rules_extracted << "\n";
-    std::cout << "  Contradictions: " << s.verifier.total_contradictions  << "\n";
-    std::cout << "  Resolved:       " << s.verifier.total_resolved        << "\n";
-    std::cout << "  Flagged:        " << s.verifier.total_flagged         << "\n";
-    std::cout << "  Uptime:         " << s.uptime_seconds                 << "\n\n";
+    std::cout << "  Checks:         " << s.verifier.total_checks           << "\n";
+    std::cout << "  Extracted:      " << s.verifier.total_rules_extracted  << "\n";
+    std::cout << "  Contradictions: " << s.verifier.total_contradictions   << "\n";
+    std::cout << "  Resolved:       " << s.verifier.total_resolved         << "\n";
+    std::cout << "  Flagged:        " << s.verifier.total_flagged          << "\n";
+    std::cout << "  Uptime:         " << s.uptime_seconds                  << "\n\n";
 }
 
 static void print_rules(cardinal::CardinalAPI& api) {
@@ -91,12 +92,10 @@ static void print_rules(cardinal::CardinalAPI& api) {
     std::cout << "\n  -- Rule Store (" << result.value.size() << " rules) --\n";
     for (size_t i = 0; i < result.value.size(); ++i) {
         const auto& r = result.value[i];
-        std::cout << "  " << (i + 1) << ". [" << r.domain << "] "
+        std::cout << "  " << (i+1) << ". [" << r.domain << "] "
                   << "conf=" << static_cast<int>(r.confidence * 100) << "%";
-        if (!r.reasoning_type.empty())
-            std::cout << " type=" << r.reasoning_type;
         if (r.has_provenance)
-            std::cout << " ep=" << r.episode_id.substr(0, 8) << "...";
+            std::cout << " ep=" << r.episode_id.substr(0, 12) << "...";
         std::cout << "\n";
         std::cout << "     IF:   "
                   << r.condition.substr(0, 80)
@@ -179,8 +178,7 @@ static void print_self_model(cardinal::CardinalAPI& api) {
         if (!s.active_adapter_path.empty())
             std::cout << "  Active adapter:   " << s.active_adapter_path << "\n";
         if (s.last_improvement_pct > 0.0f)
-            std::cout << "  Last improvement: +"
-                      << s.last_improvement_pct << "%\n";
+            std::cout << "  Last improvement: +" << s.last_improvement_pct << "%\n";
     }
     std::cout << "\n";
 }
@@ -200,30 +198,31 @@ static void handle_reflect(cardinal::CardinalAPI& api) {
         std::cout << "\n\n";
         return;
     }
-    std::cout << "  Trigger:           " << r.trigger           << "\n";
-    std::cout << "  Episodes analysed: " << r.episodes_analyzed << "\n";
-    std::cout << "  Failures analysed: " << r.failures_analyzed << "\n";
-    std::cout << "  Findings:          " << r.findings.size()   << "\n";
-    std::cout << "  Rules committed:   " << r.rules_committed   << "\n";
-    std::cout << "  Duration:          " << r.duration_ms       << " ms\n";
+    std::cout << "  Trigger:          " << r.trigger            << "\n";
+    std::cout << "  Episodes analyzed:" << r.episodes_analyzed  << "\n";
+    std::cout << "  Failures analyzed:" << r.failures_analyzed  << "\n";
+    std::cout << "  Findings:         " << r.findings.size()    << "\n";
+    std::cout << "  Rules committed:  " << r.rules_committed    << "\n";
+    std::cout << "  Duration:         " << r.duration_ms        << "ms\n";
     if (!r.findings.empty()) {
         std::cout << "\n  Findings:\n";
         for (const auto& f : r.findings) {
-            std::cout << "  [" << f.domain << "] conf="
-                      << static_cast<int>(f.confidence * 100) << "%\n";
-            std::cout << "    Pattern: " << f.pattern        << "\n";
-            std::cout << "    Action:  " << f.recommendation << "\n";
+            std::cout << "  [" << f.domain << "] " << f.pattern << "\n";
+            std::cout << "    → " << f.recommendation << "\n";
         }
     }
     std::cout << "\n";
 }
 
 static void handle_train(cardinal::CardinalAPI& api,
-                          const std::string& domain_hint) {
+                          const std::string& domain_hint)
+{
     std::cout << "\n  Queuing LoRA training";
     if (!domain_hint.empty())
-        std::cout << " (domain: " << domain_hint << ")";
+        std::cout << " (domain hint: " << domain_hint << ")";
     std::cout << "...\n";
+    std::cout << "  Training runs asynchronously in the background.\n";
+    std::cout << "  Use /self_model to check status.\n\n";
 
     auto result = api.trigger_training(domain_hint);
     if (!result.ok()) {
@@ -231,10 +230,9 @@ static void handle_train(cardinal::CardinalAPI& api,
         return;
     }
     if (result.value) {
-        std::cout << "  Training cycle queued. Runs in background.\n";
-        std::cout << "  Use /self_model to monitor progress.\n\n";
+        std::cout << "  Training cycle queued successfully.\n\n";
     } else {
-        std::cout << "  Training not queued (disabled or already running).\n\n";
+        std::cout << "  Training not queued (check config or episode count).\n\n";
     }
 }
 
@@ -251,7 +249,7 @@ int main() {
         // 1. Initialize
         // =====================================================================
         cardinal::Logger::instance().init("logs/cardinal.log");
-        LOG_INFO("Cardinal v1.4.0 starting...");
+        LOG_INFO("Cardinal v1.5.0 starting...");
 
         cardinal::CardinalAPI api;
         auto init_result = api.init("config.json");
@@ -262,7 +260,7 @@ int main() {
         }
 
         // =====================================================================
-        // 2. HTTP server
+        // 2. HTTP server setup
         // =====================================================================
         auto config = cardinal::ConfigLoader::load("config.json");
         cardinal::HttpServer http_server(api, config);
@@ -278,9 +276,9 @@ int main() {
                 std::cout << "  HTTP server disabled in config.\n\n";
                 return;
             }
-            http_thread  = std::thread([&]() { http_server.start(); });
+            http_thread = std::thread([&]() { http_server.start(); });
             http_running = true;
-            std::cout << "  HTTP server started at http://"
+            std::cout << "  HTTP server started on "
                       << config.api.host << ":" << config.api.port << "\n\n";
         };
 
@@ -303,6 +301,7 @@ int main() {
         print_banner(config.api.http_enabled, config.api.host, config.api.port);
 
         const std::string session_id = "default";
+        std::cout << "  Cardinal is ready. Type your message.\n\n";
 
         while (!g_shutdown_requested.load()) {
             std::cout << "You: ";
@@ -311,7 +310,7 @@ int main() {
             std::string user_input;
             if (!std::getline(std::cin, user_input)) break;
 
-            // Trim whitespace
+            // Trim
             auto s = user_input.find_first_not_of(" \t\r\n");
             if (s == std::string::npos) continue;
             auto e = user_input.find_last_not_of(" \t\r\n");
@@ -319,10 +318,10 @@ int main() {
             if (user_input.empty()) continue;
 
             // ------------------------------------------------------------------
-            // Built-in commands
+            // Commands
             // ------------------------------------------------------------------
             if (user_input == "/exit") {
-                std::cout << "\n  Cardinal: Until next time.\n\n";
+                std::cout << "\n  Cardinal: Farewell.\n\n";
                 break;
             }
             if (user_input == "/reset") {
@@ -346,14 +345,17 @@ int main() {
                 std::cout << "\n  Running full contradiction scan...\n";
                 auto result = api.run_scan();
                 if (result.ok()) {
-                    std::cout << "  Contradictions: "
-                              << result.value.total_contradictions
-                              << "  Resolved: " << result.value.resolved
-                              << "  Flagged: "  << result.value.flagged
+                    std::cout << "  Contradictions: "  << result.value.total_contradictions
+                              << " | Resolved: "       << result.value.resolved
+                              << " | Flagged: "        << result.value.flagged
                               << "\n\n";
                 }
                 continue;
             }
+            if (user_input == "/http start") { start_http(); continue; }
+            if (user_input == "/http stop")  { stop_http();  continue; }
+
+            // v1.4.0 commands
             if (user_input == "/self_model") {
                 print_self_model(api);
                 continue;
@@ -363,36 +365,85 @@ int main() {
                 continue;
             }
             if (user_input == "/train" ||
-                user_input.substr(0, 7) == "/train ") {
+                user_input.substr(0, 7) == "/train ")
+            {
                 std::string domain_hint;
                 if (user_input.size() > 7)
                     domain_hint = user_input.substr(7);
                 handle_train(api, domain_hint);
-                // Apply any pending LoRA adapter at this session boundary.
+                // Mark session boundary so any pending adapter gets applied
                 api.on_session_boundary();
                 continue;
             }
-            if (user_input == "/http start") { start_http(); continue; }
-            if (user_input == "/http stop")  { stop_http();  continue; }
 
-            // Unknown command
-            if (!user_input.empty() && user_input[0] == '/') {
-                std::cout << "\n  Unknown command. Type your message or use "
-                             "/exit, /stats, /rules, /self_model, /reflect, "
-                             "/train, /scan, /export, /reset.\n\n";
+            // v1.5.0 commands
+            if (user_input == "/scheduler") {
+                auto result = api.get_scheduler_status();
+                if (!result.ok()) {
+                    std::cout << "  [scheduler error: " << result.error_message << "]\n\n";
+                } else {
+                    const auto& s = result.value;
+                    std::cout << "\n  -- Scheduler --\n";
+                    std::cout << "  Running:  " << (s.running ? "yes" : "no") << "\n";
+                    std::cout << "  Tasks:    " << s.total_tasks
+                              << " (" << s.enabled_tasks << " enabled)\n";
+                    std::cout << "  Runs:     " << s.total_runs
+                              << " | ok=" << s.successful_runs
+                              << " | fail=" << s.failed_runs << "\n";
+                    if (!s.current_task_name.empty())
+                        std::cout << "  Active:   " << s.current_task_name << "\n";
+                    if (!s.last_run_at.empty())
+                        std::cout << "  Last run: " << s.last_run_at << "\n";
+                    if (!s.next_scheduled_at.empty())
+                        std::cout << "  Next:     " << s.next_scheduled_at << "\n";
+                    std::cout << "\n";
+                }
+                continue;
+            }
+            if (user_input == "/tasks") {
+                auto result = api.list_tasks();
+                if (!result.ok()) {
+                    std::cout << "  [tasks error: " << result.error_message << "]\n\n";
+                } else if (result.value.empty()) {
+                    std::cout << "\n  No scheduled tasks.\n\n";
+                } else {
+                    std::cout << "\n  -- Scheduled Tasks (" << result.value.size() << ") --\n";
+                    for (const auto& t : result.value) {
+                        std::cout << "  [" << t.id.substr(0, 8) << "] "
+                                  << (t.enabled ? "ON " : "OFF") << "  "
+                                  << t.name;
+                        if (!t.last_run_at.empty())
+                            std::cout << "  (last: " << t.last_run_at << ")";
+                        std::cout << "\n";
+                    }
+                    std::cout << "\n";
+                }
+                continue;
+            }
+            if (user_input == "/computer") {
+                auto result = api.get_computer_status();
+                if (!result.ok()) {
+                    std::cout << "  [computer error: " << result.message << "]\n\n";
+                } else {
+                    const auto& s = result.value;
+                    std::cout << "\n  -- Computer Use --\n";
+                    std::cout << "  Display: " << s.display_var << "\n";
+                    std::cout << "  Server:  " << display_server_to_string(s.server) << "\n";
+                    std::cout << "  Size:    " << s.width << "x" << s.height << "\n\n";
+                }
                 continue;
             }
 
             // ------------------------------------------------------------------
-            // Inference (streaming)
+            // Inference
             // ------------------------------------------------------------------
             std::cout << "\nCardinal: ";
             std::cout.flush();
 
             cardinal::ApiStreamCallback stream_cb =
-                [](const cardinal::StreamToken& tok) -> bool {
-                    if (!tok.is_final)
-                        std::cout << tok.token << std::flush;
+                [](const cardinal::StreamToken& token) -> bool {
+                    if (!token.is_final)
+                        std::cout << token.token << std::flush;
                     return true;
                 };
 
@@ -406,35 +457,29 @@ int main() {
 
             const auto& r = result.value;
 
-            // Compact feeling summary
-            std::cout << "  ["
-                      << r.feeling.reasoning_domain << " | "
-                      << r.feeling.reasoning_type   << " | "
-                      << "conf=" << static_cast<int>(r.feeling.confidence * 100) << "%";
+            // Feeling summary line
+            std::cout << "  [" << r.feeling.reasoning_domain
+                      << " | " << r.feeling.reasoning_type
+                      << " | conf=" << static_cast<int>(r.feeling.confidence * 100) << "%";
             if (r.feeling.uncertainty_flag)   std::cout << " | uncertain";
             if (r.feeling.contradiction_flag) std::cout << " | contradiction";
             if (r.feeling.rule_candidate)     std::cout << " | rule_candidate";
             if (r.rule_committed)
-                std::cout << " | rule=" << r.committed_rule_id.substr(0, 8) << "...";
+                std::cout << " | rule=" << r.committed_rule_id;
             if (r.contradictions_resolved > 0)
                 std::cout << " | resolved=" << r.contradictions_resolved;
             if (r.contradictions_flagged > 0)
-                std::cout << " | flagged="  << r.contradictions_flagged;
+                std::cout << " | flagged=" << r.contradictions_flagged;
             std::cout << "]\n\n";
         }
 
         // =====================================================================
-        // 4. Shutdown — correct order matters
-        //    1. Apply pending adapter (before inference stops being possible)
-        //    2. Stop HTTP server (no more requests)
-        //    3. Shutdown API (joins training thread, closes DBs)
+        // 4. Clean shutdown — apply any pending adapter before exit
         // =====================================================================
-        std::cout << "\n  Shutting down...\n";
-        api.on_session_boundary();   // apply any pending LoRA adapter
+        api.on_session_boundary();
         if (http_running) stop_http();
         api.shutdown();
-        LOG_INFO("Cardinal v1.4.0 shutdown complete");
-        std::cout << "  Done.\n\n";
+        LOG_INFO("Cardinal shutdown complete");
     }
     catch (const std::exception& ex) {
         std::cerr << "\n[FATAL] " << ex.what() << "\n";

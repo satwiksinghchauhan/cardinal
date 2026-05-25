@@ -1,8 +1,14 @@
-// SPDX-License-Identifier: AGPL-3.0-only
-// SPDX-FileCopyrightText: Copyright (C) 2026 Satwik Singh (Cardinal AGI)
 // =============================================================================
-// Cardinal - API Facade Implementation (v1.2.0)
+// Cardinal - API Facade Implementation (v1.5.0)
 // File: src/api/cardinal_api.cpp
+//
+// Changes from v1.4.0:
+//   - SchedulerEngine owned and started in init()
+//   - All computer use controllers owned and initialised in init()
+//   - shutdown() stops scheduler + browser controller
+//   - run_post_inference() notifies scheduler idle tracker
+//   - All scheduler API methods added
+//   - All computer use API methods added
 // =============================================================================
 
 #include "api/cardinal_api.h"
@@ -28,7 +34,22 @@
 #include "agent/agent_executor.h"
 #include "explainability/audit_log.h"
 #include "explainability/explainability_exporter.h"
-#include "training/self_improvement_loop.h"   // v1.4.0 — needed for unique_ptr destructor
+#include "training/self_improvement_loop.h"
+
+// v1.5.0 — Scheduler
+#include "scheduler/scheduler_engine.h"
+
+// v1.5.0 — Computer Use
+#include "computer/display_detector.h"
+#include "computer/screen_reader.h"
+#include "computer/input_controller.h"
+#include "computer/app_controller.h"
+#include "computer/browser_controller.h"
+#include "computer/shell_executor.h"
+#include "computer/file_manager.h"
+#include "computer/system_controller.h"
+#include "computer/email_controller.h"
+#include "computer/atspi_reader.h"
 
 #include <sstream>
 #include <iomanip>
@@ -58,7 +79,7 @@ namespace cardinal {
                 "CardinalAPI::init() called twice");
 
         try {
-            LOG_INFO("CardinalAPI v1.2.0 initializing from: " + config_path);
+            LOG_INFO("CardinalAPI v1.5.0 initializing from: " + config_path);
             start_time_ = std::chrono::steady_clock::now();
 
             // Config
@@ -107,7 +128,7 @@ namespace cardinal {
                               ? "native" : "retry_loop"));
             }
 
-            // Tools (new in v1.2.0)
+            // Tools
             tool_registry_ = std::make_unique<ToolRegistry>(*config_);
             tool_registry_->init();
 
@@ -115,8 +136,7 @@ namespace cardinal {
             tool_executor_->set_knowledge_graph(knowledge_graph_.get());
             tool_executor_->set_retriever(retriever_.get());
 
-            // Vision encoder (new in v1.3.0)
-            // Only initializes if vision.model_path is configured
+            // Vision encoder
             vision_cache_   = std::make_unique<VisionCache>(*config_);
             vision_cache_->init();
 
@@ -131,7 +151,7 @@ namespace cardinal {
                 LOG_INFO("Vision encoder not loaded — analyze_image tool disabled");
             }
 
-            // Explainability (new in v1.2.0)
+            // Explainability
             audit_log_ = std::make_unique<AuditLog>(*config_);
             audit_log_->open();
 
@@ -144,7 +164,7 @@ namespace cardinal {
             pipeline_->set_tool_registry(tool_registry_.get());
             pipeline_->set_audit_log(audit_log_.get());
 
-            // Agent executor (new in v1.2.0)
+            // Agent executor
             agent_executor_ = std::make_unique<AgentExecutor>(
                 *config_, *backend_, *tool_registry_, *tool_executor_);
 
@@ -156,7 +176,7 @@ namespace cardinal {
             sessions_ = std::make_unique<SessionManager>();
             sessions_->create();
 
-            // Self-Improvement (new in v1.4.0) — Layers 1, 2, 3
+            // Self-Improvement (v1.4.0) — Layers 1, 2, 3
             if (config_->self_improvement.enabled) {
                 self_improvement_ = std::make_unique<SelfImprovementLoop>(
                     *config_, *storage_, *rule_store_, *backend_);
@@ -165,6 +185,68 @@ namespace cardinal {
             } else {
                 LOG_INFO("Self-Improvement disabled in config");
             }
+
+            // ---- Scheduler (v1.5.0) ----
+            if (config_->scheduler.enabled) {
+                SchedulerDeps deps;
+                deps.agent_executor   = agent_executor_.get();
+                deps.pipeline         = pipeline_.get();
+                deps.self_improvement = self_improvement_.get();
+                deps.episodic         = storage_.get();
+                deps.sessions         = sessions_.get();
+                deps.inference_busy_fn = [this]() -> bool {
+                    if (inference_mutex_.try_lock()) {
+                        inference_mutex_.unlock();
+                        return false;
+                    }
+                    return true;
+                };
+                scheduler_ = std::make_unique<SchedulerEngine>(
+                    *config_, std::move(deps));
+                scheduler_->start();
+                LOG_INFO("SchedulerEngine started");
+            }
+
+            // ---- Computer Use (v1.5.0) ----
+            if (config_->computer_use.enabled) {
+                display_detector_ = std::make_unique<DisplayDetector>();
+                display_detector_->detect();
+
+                screen_reader_ = std::make_unique<ScreenReader>(
+                    *display_detector_, *config_,
+                    vision_encoder_->is_ready() ? vision_encoder_.get() : nullptr);
+
+                input_controller_  = std::make_unique<InputController>(
+                    *display_detector_, *config_);
+                app_controller_    = std::make_unique<AppController>(
+                    *display_detector_, *config_);
+                shell_executor_    = std::make_unique<ShellExecutor>(*config_);
+                file_manager_      = std::make_unique<FileManager>(*config_);
+                system_controller_ = std::make_unique<SystemController>(*config_);
+                email_controller_  = std::make_unique<EmailController>(*config_);
+                atspi_reader_      = std::make_unique<AtSpiReader>(*config_);
+                browser_controller_= std::make_unique<BrowserController>(
+                    *config_,
+                    vision_encoder_->is_ready() ? vision_encoder_.get() : nullptr);
+
+                LOG_INFO("Computer use initialised (" +
+                    std::string(display_server_to_string(
+                        display_detector_->server())) + ")");
+
+                // Wire computer use controllers into tool_executor
+                tool_executor_->set_screen_reader(screen_reader_.get());
+                tool_executor_->set_input_controller(input_controller_.get());
+                tool_executor_->set_app_controller(app_controller_.get());
+                tool_executor_->set_browser_controller(browser_controller_.get());
+                tool_executor_->set_shell_executor(shell_executor_.get());
+                tool_executor_->set_file_manager(file_manager_.get());
+                tool_executor_->set_system_controller(system_controller_.get());
+                tool_executor_->set_email_controller(email_controller_.get());
+            }
+
+            // Wire scheduler into tool_executor (works headless too)
+            if (scheduler_)
+                tool_executor_->set_scheduler(scheduler_.get());
 
             initialized_.store(true);
 
@@ -197,6 +279,16 @@ namespace cardinal {
         shutting_down_.store(true);
         try {
             LOG_INFO("CardinalAPI shutting down...");
+
+            // v1.5.0 — stop scheduler and browser first
+            if (scheduler_) {
+                scheduler_->stop();
+                scheduler_.reset();
+            }
+            if (browser_controller_) {
+                browser_controller_->stop();
+            }
+
             if (checker_)          checker_->run_maintenance();
             if (rule_store_)       rule_store_->save();
             if (sessions_)         sessions_->destroy_all();
@@ -217,7 +309,7 @@ namespace cardinal {
     }
 
     // =========================================================================
-    // Session management (unchanged from v1.1.0)
+    // Session management (unchanged)
     // =========================================================================
 
     CardinalResult<std::string>
@@ -238,7 +330,6 @@ namespace cardinal {
         if (!sessions_->destroy(id))
             return CardinalVoidResult::failure(
                 CardinalStatus::SESSION_NOT_FOUND, "Session not found: " + id);
-        // v1.4.0 — apply any pending LoRA adapter at session boundary
         on_session_boundary();
         return CardinalVoidResult::success();
     }
@@ -377,7 +468,7 @@ namespace cardinal {
     }
 
     // =========================================================================
-    // agent (new in v1.2.0)
+    // agent
     // =========================================================================
 
     CardinalResult<ChatResponse>
@@ -402,15 +493,14 @@ namespace cardinal {
         std::lock_guard<std::mutex> inf_lock(inference_mutex_);
 
         try {
-            // Start trace
             auto info = backend_->get_info();
             TraceBuilder trace_builder(session_id, info.name, info.model_name);
             trace_builder.record_query(goal, true, goal);
 
             AgentGoal agent_goal;
-            agent_goal.session_id      = session_id;
-            agent_goal.goal            = goal;
-            agent_goal.max_iterations  = max_iterations;
+            agent_goal.session_id     = session_id;
+            agent_goal.goal           = goal;
+            agent_goal.max_iterations = max_iterations;
 
             AgentResult agent_result = agent_executor_->run(
                 agent_goal, trace_builder, nullptr);
@@ -418,13 +508,11 @@ namespace cardinal {
             auto trace = trace_builder.finalize();
             if (audit_log_) audit_log_->append(trace);
 
-            // Build ChatResponse
             ChatResponse chat_resp;
-            chat_resp.session_id = session_id;
-            chat_resp.response   = agent_result.final_response;
+            chat_resp.session_id   = session_id;
+            chat_resp.response     = agent_result.final_response;
             chat_resp.agent_result = agent_result;
 
-            // Store in session history
             {
                 std::unique_lock lock(session_mutex_);
                 if (!sessions_->exists(session_id)) sessions_->create();
@@ -445,7 +533,7 @@ namespace cardinal {
     }
 
     // =========================================================================
-    // Tool management (new in v1.2.0)
+    // Tool management
     // =========================================================================
 
     CardinalVoidResult CardinalAPI::register_tools(
@@ -454,8 +542,6 @@ namespace cardinal {
         auto check = check_initialized();
         if (!check.ok()) return check;
         tool_registry_->register_tools(tools);
-        LOG_INFO("CardinalAPI: registered " + std::to_string(tools.size()) +
-                 " user-defined tools");
         return CardinalVoidResult::success();
     }
 
@@ -476,7 +562,7 @@ namespace cardinal {
     }
 
     // =========================================================================
-    // Explainability (new in v1.2.0)
+    // Explainability
     // =========================================================================
 
     CardinalResult<std::string>
@@ -484,19 +570,13 @@ namespace cardinal {
     {
         auto check = check_initialized();
         if (!check.ok())
-            return CardinalResult<std::string>::failure(
-                check.status, check.error_message);
-        if (!audit_log_)
-            return CardinalResult<std::string>::failure(
-                CardinalStatus::INTERNAL_ERROR, "Audit log not available");
+            return CardinalResult<std::string>::failure(check.status, check.error_message);
         try {
             auto trace = audit_log_->get(inference_id);
             if (trace.inference_id.empty())
                 return CardinalResult<std::string>::failure(
-                    CardinalStatus::NOT_FOUND,
-                    "Trace not found: " + inference_id);
-            return CardinalResult<std::string>::success(
-                exporter_->export_json(trace));
+                    CardinalStatus::NOT_FOUND, "Trace not found: " + inference_id);
+            return CardinalResult<std::string>::success(exporter_->export_json(trace));
         }
         catch (const std::exception& e) {
             return CardinalResult<std::string>::failure(
@@ -509,16 +589,13 @@ namespace cardinal {
     {
         auto check = check_initialized();
         if (!check.ok())
-            return CardinalResult<std::string>::failure(
-                check.status, check.error_message);
+            return CardinalResult<std::string>::failure(check.status, check.error_message);
         try {
             auto trace = audit_log_->get(inference_id);
             if (trace.inference_id.empty())
                 return CardinalResult<std::string>::failure(
-                    CardinalStatus::NOT_FOUND,
-                    "Trace not found: " + inference_id);
-            std::string path = exporter_->export_to_file(trace);
-            return CardinalResult<std::string>::success(path);
+                    CardinalStatus::NOT_FOUND, "Trace not found: " + inference_id);
+            return CardinalResult<std::string>::success(exporter_->export_to_file(trace));
         }
         catch (const std::exception& e) {
             return CardinalResult<std::string>::failure(
@@ -532,22 +609,18 @@ namespace cardinal {
         auto check = check_initialized();
         if (!check.ok())
             return CardinalResult<bool>::failure(check.status, check.error_message);
-        bool valid = audit_log_->verify(inference_id);
-        return CardinalResult<bool>::success(valid);
+        return CardinalResult<bool>::success(audit_log_->verify(inference_id));
     }
 
     CardinalResult<std::string> CardinalAPI::get_public_key() const {
         auto check = check_initialized();
         if (!check.ok())
-            return CardinalResult<std::string>::failure(
-                check.status, check.error_message);
-        return CardinalResult<std::string>::success(
-            audit_log_->public_key_pem());
+            return CardinalResult<std::string>::failure(check.status, check.error_message);
+        return CardinalResult<std::string>::success(audit_log_->public_key_pem());
     }
 
     // =========================================================================
     // Memory / verifier / export / settings / health
-    // (all unchanged from v1.1.0 — omitted for brevity, paste from original)
     // =========================================================================
 
     CardinalResult<SystemStats> CardinalAPI::get_stats() const {
@@ -579,7 +652,7 @@ namespace cardinal {
             stats.verifier.total_maintenance_runs = checker_->total_maintenance_runs();
 
             stats.uptime_seconds = uptime_string();
-            stats.version        = "1.2.0";
+            stats.version        = "1.5.0";
             stats.initialized    = true;
             return CardinalResult<SystemStats>::success(stats);
         }
@@ -821,6 +894,9 @@ namespace cardinal {
                 cr.rule_committed);
         }
 
+        // v1.5.0 — notify scheduler idle tracker
+        if (scheduler_) scheduler_->on_inference();
+
         ChatResponse chat_resp;
         chat_resp.session_id              = session_id;
         chat_resp.response                = resp.response;
@@ -902,13 +978,10 @@ namespace cardinal {
         if (!check.ok())
             return CardinalResult<SelfImprovementStatus>::failure(
                 check.status, check.error_message);
-
         if (!self_improvement_) {
-            // Self-improvement disabled — return zeroed status.
             SelfImprovementStatus s;
             return CardinalResult<SelfImprovementStatus>::success(s);
         }
-
         return CardinalResult<SelfImprovementStatus>::success(
             self_improvement_->get_status());
     }
@@ -918,15 +991,13 @@ namespace cardinal {
         if (!check.ok())
             return CardinalResult<ReflectionResult>::failure(
                 check.status, check.error_message);
-
         if (!self_improvement_) {
             ReflectionResult r;
             r.error_message = "Self-improvement is disabled in config";
             return CardinalResult<ReflectionResult>::success(r);
         }
-
-        ReflectionResult r = self_improvement_->trigger_reflection();
-        return CardinalResult<ReflectionResult>::success(r);
+        return CardinalResult<ReflectionResult>::success(
+            self_improvement_->trigger_reflection());
     }
 
     CardinalResult<bool> CardinalAPI::trigger_training(
@@ -934,16 +1005,255 @@ namespace cardinal {
         auto check = check_initialized();
         if (!check.ok())
             return CardinalResult<bool>::failure(check.status, check.error_message);
-
         if (!self_improvement_)
             return CardinalResult<bool>::success(false);
-
-        bool posted = self_improvement_->trigger_training(domain_hint);
-        return CardinalResult<bool>::success(posted);
+        return CardinalResult<bool>::success(
+            self_improvement_->trigger_training(domain_hint));
     }
 
     void CardinalAPI::on_session_boundary() {
         if (self_improvement_) self_improvement_->on_session_boundary();
+    }
+
+    // =========================================================================
+    // Scheduler API (v1.5.0)
+    // =========================================================================
+
+    CardinalVoidResult CardinalAPI::check_scheduler() const {
+        auto init_check = check_initialized();
+        if (!init_check.ok()) return init_check;
+        if (!scheduler_)
+            return CardinalVoidResult::error(CardinalStatus::SCHEDULER_ERROR,
+                                              "Scheduler is disabled in config");
+        return CardinalVoidResult::success();
+    }
+
+    CardinalResult<SchedulerStatus> CardinalAPI::get_scheduler_status() const {
+        auto guard = check_scheduler();
+        if (!guard.ok())
+            return CardinalResult<SchedulerStatus>::error(guard.status, guard.message);
+        return CardinalResult<SchedulerStatus>::success(scheduler_->get_status());
+    }
+
+    CardinalResult<std::vector<ScheduledTask>> CardinalAPI::list_tasks() const {
+        auto guard = check_scheduler();
+        if (!guard.ok())
+            return CardinalResult<std::vector<ScheduledTask>>::error(
+                guard.status, guard.message);
+        return CardinalResult<std::vector<ScheduledTask>>::success(
+            scheduler_->list_tasks());
+    }
+
+    CardinalResult<ScheduledTask> CardinalAPI::get_task(
+            const std::string& task_id) const {
+        auto guard = check_scheduler();
+        if (!guard.ok())
+            return CardinalResult<ScheduledTask>::error(guard.status, guard.message);
+        auto t = scheduler_->get_task(task_id);
+        if (!t)
+            return CardinalResult<ScheduledTask>::error(
+                CardinalStatus::NOT_FOUND, "Task not found: " + task_id);
+        return CardinalResult<ScheduledTask>::success(*t);
+    }
+
+    CardinalResult<TaskParseResult> CardinalAPI::create_task(
+            const std::string& nl_description, const std::string& session_id) {
+        auto guard = check_scheduler();
+        if (!guard.ok())
+            return CardinalResult<TaskParseResult>::error(guard.status, guard.message);
+        try {
+            auto result = scheduler_->create_task_from_nl(nl_description, session_id);
+            return CardinalResult<TaskParseResult>::success(result);
+        } catch (const std::exception& e) {
+            return CardinalResult<TaskParseResult>::error(
+                CardinalStatus::SCHEDULER_ERROR, e.what());
+        }
+    }
+
+    CardinalResult<std::string> CardinalAPI::create_task_direct(
+            const ScheduledTask& task) {
+        auto guard = check_scheduler();
+        if (!guard.ok())
+            return CardinalResult<std::string>::error(guard.status, guard.message);
+        try {
+            return CardinalResult<std::string>::success(
+                scheduler_->create_task(task));
+        } catch (const std::exception& e) {
+            return CardinalResult<std::string>::error(
+                CardinalStatus::SCHEDULER_ERROR, e.what());
+        }
+    }
+
+    CardinalVoidResult CardinalAPI::update_task(const ScheduledTask& task) {
+        auto guard = check_scheduler();
+        if (!guard.ok()) return guard;
+        if (!scheduler_->update_task(task))
+            return CardinalVoidResult::error(CardinalStatus::NOT_FOUND,
+                                              "Task not found: " + task.id);
+        return CardinalVoidResult::success();
+    }
+
+    CardinalVoidResult CardinalAPI::delete_task(const std::string& task_id) {
+        auto guard = check_scheduler();
+        if (!guard.ok()) return guard;
+        if (!scheduler_->delete_task(task_id))
+            return CardinalVoidResult::error(CardinalStatus::NOT_FOUND,
+                                              "Task not found: " + task_id);
+        return CardinalVoidResult::success();
+    }
+
+    CardinalVoidResult CardinalAPI::enable_task(const std::string& task_id) {
+        auto guard = check_scheduler();
+        if (!guard.ok()) return guard;
+        if (!scheduler_->enable_task(task_id))
+            return CardinalVoidResult::error(CardinalStatus::NOT_FOUND,
+                                              "Task not found: " + task_id);
+        return CardinalVoidResult::success();
+    }
+
+    CardinalVoidResult CardinalAPI::disable_task(const std::string& task_id) {
+        auto guard = check_scheduler();
+        if (!guard.ok()) return guard;
+        if (!scheduler_->disable_task(task_id))
+            return CardinalVoidResult::error(CardinalStatus::NOT_FOUND,
+                                              "Task not found: " + task_id);
+        return CardinalVoidResult::success();
+    }
+
+    CardinalResult<std::string> CardinalAPI::run_task_now(
+            const std::string& task_id) {
+        auto guard = check_scheduler();
+        if (!guard.ok())
+            return CardinalResult<std::string>::error(guard.status, guard.message);
+        try {
+            return CardinalResult<std::string>::success(
+                scheduler_->run_task_now(task_id));
+        } catch (const std::exception& e) {
+            return CardinalResult<std::string>::error(
+                CardinalStatus::SCHEDULER_ERROR, e.what());
+        }
+    }
+
+    CardinalResult<std::vector<TaskRun>> CardinalAPI::get_task_history(
+            const std::string& task_id, int limit) const {
+        auto guard = check_scheduler();
+        if (!guard.ok())
+            return CardinalResult<std::vector<TaskRun>>::error(
+                guard.status, guard.message);
+        return CardinalResult<std::vector<TaskRun>>::success(
+            scheduler_->get_task_history(task_id, limit));
+    }
+
+    CardinalResult<std::vector<TaskRun>> CardinalAPI::get_recent_runs(
+            int limit) const {
+        auto guard = check_scheduler();
+        if (!guard.ok())
+            return CardinalResult<std::vector<TaskRun>>::error(
+                guard.status, guard.message);
+        return CardinalResult<std::vector<TaskRun>>::success(
+            scheduler_->get_recent_runs(limit));
+    }
+
+    CardinalResult<std::vector<TaskActionLog>> CardinalAPI::get_run_action_logs(
+            const std::string& run_id) const {
+        auto guard = check_scheduler();
+        if (!guard.ok())
+            return CardinalResult<std::vector<TaskActionLog>>::error(
+                guard.status, guard.message);
+        return CardinalResult<std::vector<TaskActionLog>>::success(
+            scheduler_->get_run_action_logs(run_id));
+    }
+
+    // =========================================================================
+    // Computer Use API (v1.5.0)
+    // =========================================================================
+
+    CardinalVoidResult CardinalAPI::check_computer_use() const {
+        auto init_check = check_initialized();
+        if (!init_check.ok()) return init_check;
+        if (!display_detector_)
+            return CardinalVoidResult::error(CardinalStatus::COMPUTER_USE_ERROR,
+                                              "Computer use is disabled in config");
+        return CardinalVoidResult::success();
+    }
+
+    CardinalResult<ScreenInfo> CardinalAPI::get_computer_status() const {
+        auto guard = check_computer_use();
+        if (!guard.ok())
+            return CardinalResult<ScreenInfo>::error(guard.status, guard.message);
+        return CardinalResult<ScreenInfo>::success(display_detector_->info());
+    }
+
+    CardinalResult<Screenshot> CardinalAPI::take_screenshot(
+            bool analyze, const std::string& prompt) {
+        auto guard = check_computer_use();
+        if (!guard.ok())
+            return CardinalResult<Screenshot>::error(guard.status, guard.message);
+        try {
+            auto s = screen_reader_->capture(analyze);
+            if (analyze && !prompt.empty() && s.description.empty())
+                s.description = screen_reader_->analyze(s.path, prompt);
+            return CardinalResult<Screenshot>::success(s);
+        } catch (const std::exception& e) {
+            return CardinalResult<Screenshot>::error(
+                CardinalStatus::COMPUTER_USE_ERROR, e.what());
+        }
+    }
+
+    CardinalResult<std::string> CardinalAPI::computer_click(
+            int x, int y, const std::string& description) {
+        auto guard = check_computer_use();
+        if (!guard.ok())
+            return CardinalResult<std::string>::error(guard.status, guard.message);
+        try {
+            if (!description.empty() && (x < 0 || y < 0)) {
+                auto pt = screen_reader_->find_element(description);
+                if (!pt)
+                    return CardinalResult<std::string>::error(
+                        CardinalStatus::COMPUTER_USE_ERROR,
+                        "Could not locate element: " + description);
+                x = pt->x; y = pt->y;
+            }
+            input_controller_->mouse_click(x, y);
+            return CardinalResult<std::string>::success(
+                "Clicked at (" + std::to_string(x) + "," + std::to_string(y) + ")");
+        } catch (const std::exception& e) {
+            return CardinalResult<std::string>::error(
+                CardinalStatus::COMPUTER_USE_ERROR, e.what());
+        }
+    }
+
+    CardinalResult<std::string> CardinalAPI::computer_type(
+            const std::string& text, const std::string& key) {
+        auto guard = check_computer_use();
+        if (!guard.ok())
+            return CardinalResult<std::string>::error(guard.status, guard.message);
+        try {
+            if (!key.empty())  input_controller_->send_key(key);
+            if (!text.empty()) input_controller_->type_text(text);
+            return CardinalResult<std::string>::success(
+                key.empty() ? "Typed: " + text : "Sent key: " + key);
+        } catch (const std::exception& e) {
+            return CardinalResult<std::string>::error(
+                CardinalStatus::COMPUTER_USE_ERROR, e.what());
+        }
+    }
+
+    CardinalResult<ShellResult> CardinalAPI::computer_shell(
+            const std::string& command, int timeout_seconds) {
+        auto guard = check_computer_use();
+        if (!guard.ok())
+            return CardinalResult<ShellResult>::error(guard.status, guard.message);
+        try {
+            auto result = shell_executor_->run(command, timeout_seconds);
+            if (!result.success)
+                return CardinalResult<ShellResult>::error(
+                    CardinalStatus::COMPUTER_USE_ERROR, result.stderr_text);
+            return CardinalResult<ShellResult>::success(result);
+        } catch (const std::exception& e) {
+            return CardinalResult<ShellResult>::error(
+                CardinalStatus::COMPUTER_USE_ERROR, e.what());
+        }
     }
 
 } // namespace cardinal

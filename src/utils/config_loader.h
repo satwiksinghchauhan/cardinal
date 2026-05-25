@@ -1,18 +1,19 @@
-// SPDX-License-Identifier: AGPL-3.0-only
-// SPDX-FileCopyrightText: Copyright (C) 2026 Satwik Singh (Cardinal AGI)
 #pragma once
 // =============================================================================
-// Cardinal - Config Loader (v1.4.0)
+// Cardinal - Config Loader (v1.5.0)
 // File: src/utils/config_loader.h
 //
-// Changes from v1.3.0:
-//   - SelfModelConfig            added
-//   - MetaCognitionConfig        added  (config-loader version, not the
-//                                        class-internal one in meta_cognition.h)
-//   - TrainingConfig             added
-//   - SelfImprovementConfig      added  (top-level wrapper)
-//   - CardinalConfig gains       self_improvement field
-//   - CardinalStatus gains       TRAINING_FAILED = 13, SELF_MODEL_ERROR = 14
+// Changes from v1.4.0:
+//   - SchedulerConfig           added
+//   - ComputerUseSafetyConfig   added
+//   - ComputerUseScreenConfig   added
+//   - ComputerUseBrowserConfig  added
+//   - ComputerUseShellConfig    added
+//   - ComputerUseEmailConfig    added
+//   - ComputerUseAtSpiConfig    added
+//   - ComputerUseConfig         added  (top-level wrapper)
+//   - CardinalConfig gains       scheduler + computer_use fields
+//   - ConfigLoader gains         parse_scheduler / parse_computer_use
 // =============================================================================
 
 #include <string>
@@ -163,7 +164,7 @@ namespace cardinal {
     };
 
     // -------------------------------------------------------------------------
-    // SelfModelConfig  (new in v1.4.0)
+    // SelfModelConfig (new in v1.4.0)
     // -------------------------------------------------------------------------
     struct SelfModelConfig {
         bool        enabled            = true;
@@ -173,11 +174,6 @@ namespace cardinal {
         int         history_window     = 100;
     };
 
-    // -------------------------------------------------------------------------
-    // MetaCognitionConfig  (new in v1.4.0)
-    // Config-loader struct — parallel to the one in meta_cognition.h but
-    // kept here so config_loader has no dependency on self_model headers.
-    // -------------------------------------------------------------------------
     struct MetaCognitionLoaderConfig {
         bool  enabled                            = true;
         int   trigger_every_n_inferences         = 20;
@@ -188,35 +184,22 @@ namespace cardinal {
         float corrective_rule_confidence         = 0.6f;
     };
 
-    // -------------------------------------------------------------------------
-    // TrainingConfig  (new in v1.4.0)
-    // -------------------------------------------------------------------------
     struct TrainingConfig {
         bool        enabled                          = true;
-
-        // LoRA hyper-parameters.
         int         lora_rank                        = 8;
         int         lora_alpha                       = 16;
         float       learning_rate                    = 0.0001f;
         int         epochs                           = 3;
         int         batch_size                       = 4;
-
-        // Episode selection.
         int         min_episodes_for_training        = 50;
         float       min_quality_confidence           = 0.75f;
-        int         max_examples                     = 0;    // 0 = no hard cap
-
-        // Trigger conditions.
+        int         max_examples                     = 0;
         int         trigger_every_n_episodes         = 100;
         int         trigger_every_n_hours            = 24;
         float       trigger_on_domain_confidence_below = 0.5f;
-
-        // Adapter load policy.
         std::string adapter_load_policy              = "session_boundary";
         float       eval_improvement_threshold_pct   = 5.0f;
         int         eval_holdout_episodes            = 20;
-
-        // Paths.
         std::string adapter_output_dir               = "data/training/adapters";
         std::string dataset_output_dir               = "data/training/datasets";
         std::string export_script_dir                = "data/training/scripts";
@@ -226,10 +209,6 @@ namespace cardinal {
         std::string llama_finetune_binary            = "vendor/llama.cpp/build/bin/llama-finetune";
     };
 
-    // -------------------------------------------------------------------------
-    // SelfImprovementConfig  (new in v1.4.0)
-    // Top-level wrapper for all three layers.
-    // -------------------------------------------------------------------------
     struct SelfImprovementConfig {
         bool                     enabled        = true;
         SelfModelConfig          self_model;
@@ -316,7 +295,87 @@ namespace cardinal {
     };
 
     // -------------------------------------------------------------------------
-    // CardinalConfig (v1.4.0)
+    // SchedulerConfig  (new in v1.5.0)
+    // -------------------------------------------------------------------------
+    struct SchedulerConfig {
+        bool        enabled                      = false;
+        std::string db_path                      = "data/scheduler/scheduler.db";
+        int         check_interval_seconds       = 30;
+        int         max_concurrent_tasks         = 1;
+        int         idle_threshold_minutes       = 5;
+        std::string task_session_prefix          = "scheduler_";
+        int         run_history_max_entries      = 1000;
+        int         max_task_duration_seconds    = 300;
+    };
+
+    // -------------------------------------------------------------------------
+    // ComputerUseConfig  (new in v1.5.0)
+    // -------------------------------------------------------------------------
+    struct ComputerUseSafetyConfig {
+        bool                     whitelist_enabled            = true;
+        std::vector<std::string> allowed_apps;
+        std::vector<std::string> allowed_domains;
+        std::vector<std::string> allowed_paths;
+        std::vector<std::string> blocked_commands             = {
+            "rm -rf /", "mkfs", "dd if=", "sudo rm -rf", ":(){:|:&};:"
+        };
+        bool                     confirmation_required        = true;
+        int                      confirmation_timeout_seconds = 30;
+        bool                     watch_mode                   = true;
+        bool                     full_autonomy                = false;
+        bool                     allow_file_write             = false;
+    };
+
+    struct ComputerUseScreenConfig {
+        std::string screenshot_tool        = "auto";
+        bool        vision_analysis        = true;
+        int         watch_interval_seconds = 2;
+    };
+
+    struct ComputerUseBrowserConfig {
+        std::string executable              = "google-chrome";
+        std::string venv_path               = "~/cardinal/cardinal-browser-venv";
+        int         playwright_timeout_ms   = 10000;
+        bool        headless                = false;
+        std::string user_data_dir           = "data/browser_profile";
+    };
+
+    struct ComputerUseShellConfig {
+        bool        enabled           = true;
+        std::string shell             = "/bin/bash";
+        int         timeout_seconds   = 30;
+        std::string working_directory = "~";
+    };
+
+    struct ComputerUseEmailConfig {
+        bool        enabled                  = false;
+        std::string mode                     = "imap_smtp";
+        std::string imap_host;
+        int         imap_port                = 993;
+        std::string smtp_host;
+        int         smtp_port                = 587;
+        std::string address;
+        bool        gmail_api_enabled        = false;
+        std::string gmail_credentials_path   = "data/gmail_credentials.json";
+    };
+
+    struct ComputerUseAtSpiConfig {
+        bool enabled             = true;
+        bool fallback_to_vision  = true;
+    };
+
+    struct ComputerUseConfig {
+        bool                       enabled  = false;
+        ComputerUseSafetyConfig    safety;
+        ComputerUseScreenConfig    screen;
+        ComputerUseBrowserConfig   browser;
+        ComputerUseShellConfig     shell;
+        ComputerUseEmailConfig     email;
+        ComputerUseAtSpiConfig     atspi;
+    };
+
+    // -------------------------------------------------------------------------
+    // CardinalConfig (v1.5.0)
     // -------------------------------------------------------------------------
     struct CardinalConfig {
         BackendConfig          backend;
@@ -331,13 +390,15 @@ namespace cardinal {
         AgentConfig            agent;
         ExplainabilityConfig   explainability;
         VisionConfig           vision;
-        SelfImprovementConfig  self_improvement;   // ← new in v1.4.0
+        SelfImprovementConfig  self_improvement;
+        SchedulerConfig        scheduler;       // ← new in v1.5.0
+        ComputerUseConfig      computer_use;    // ← new in v1.5.0
         BenchmarkConfig        benchmark;
         LoggingConfig          logging;
     };
 
     // -------------------------------------------------------------------------
-    // ConfigLoader (v1.4.0)
+    // ConfigLoader (v1.5.0)
     // -------------------------------------------------------------------------
     class ConfigLoader {
     public:
@@ -361,7 +422,9 @@ namespace cardinal {
         static VisionConfig               parse_vision(const auto& j);
         static AgentConfig                parse_agent(const auto& j);
         static ExplainabilityConfig       parse_explainability(const auto& j);
-        static SelfImprovementConfig      parse_self_improvement(const auto& j); // new
+        static SelfImprovementConfig      parse_self_improvement(const auto& j);
+        static SchedulerConfig            parse_scheduler(const auto& j);      // new
+        static ComputerUseConfig          parse_computer_use(const auto& j);   // new
         static BenchmarkConfig            parse_benchmark(const auto& j);
         static LoggingConfig              parse_logging(const auto& j);
     };

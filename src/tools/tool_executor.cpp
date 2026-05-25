@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: AGPL-3.0-only
-// SPDX-FileCopyrightText: Copyright (C) 2026 Satwik Singh (Cardinal AGI)
 // =============================================================================
 // Cardinal - Tool Executor Implementation
 // File: src/tools/tool_executor.cpp
@@ -21,6 +19,7 @@
 #include <fstream>
 #include <filesystem>
 #include <chrono>
+#include <thread>
 #include <regex>
 #include <cstdio>
 #include <array>
@@ -28,6 +27,18 @@
 
 // muparser for safe math evaluation
 #include <muParser.h>
+
+// v1.5.0 — Computer Use + Scheduler tool executors
+#include "computer/screen_reader.h"
+#include "computer/input_controller.h"
+#include "computer/app_controller.h"
+#include "computer/browser_controller.h"
+#include "computer/shell_executor.h"
+#include "computer/file_manager.h"
+#include "computer/system_controller.h"
+#include "computer/email_controller.h"
+#include "computer/atspi_reader.h"
+#include "scheduler/scheduler_engine.h"
 
 using json = nlohmann::json;
 
@@ -215,6 +226,22 @@ namespace cardinal {
             return execute_analyze_image(call, config_,
                                          *vision_encoder_, *vision_cache_);
         }
+
+        // v1.5.0 — Computer Use tools
+        if (name == "screenshot")       return execute_screenshot(call);
+        if (name == "click")            return execute_click(call);
+        if (name == "type_text")        return execute_type_text(call);
+        if (name == "open_app")         return execute_open_app(call);
+        if (name == "close_app")        return execute_close_app(call);
+        if (name == "browser")          return execute_browser(call);
+        if (name == "shell_run")        return execute_shell_run(call);
+        if (name == "file_ops")         return execute_file_ops(call);
+        if (name == "system_control")   return execute_system_control(call);
+        if (name == "email")            return execute_email(call);
+        if (name == "watch_screen")     return execute_watch_screen(call);
+
+        // v1.5.0 — Scheduler tool
+        if (name == "schedule_task")    return execute_schedule_task(call);
 
         return make_error(call, ToolStatus::NOT_FOUND,
                           "No executor for tool: " + name);
@@ -925,5 +952,547 @@ namespace cardinal {
                   std::to_string(duration_ms) + "ms");
         return r;
     }
+
+    // =========================================================================
+    // v1.5.0 — Computer Use tool implementations
+    // =========================================================================
+
+    ToolResult ToolExecutor::execute_screenshot(const ToolCall& call) const {
+        if (!screen_reader_)
+            return make_error(call, ToolStatus::FAILURE,
+                "screenshot: computer use not initialised");
+        auto t0 = std::chrono::steady_clock::now();
+        try {
+            bool analyze = (get_arg(call, "analyze", "true") != "false");
+            std::string prompt = get_arg(call, "prompt", "");
+
+            // Optional region
+            std::string rx = get_arg(call, "region_x", "");
+            Screenshot s;
+            if (!rx.empty()) {
+                ScreenRegion region;
+                region.x      = std::stoi(rx);
+                region.y      = std::stoi(get_arg(call, "region_y", "0"));
+                region.width  = std::stoi(get_arg(call, "region_w", "800"));
+                region.height = std::stoi(get_arg(call, "region_h", "600"));
+                s = screen_reader_->capture_region(region, analyze);
+            } else {
+                s = screen_reader_->capture(analyze);
+            }
+            if (analyze && !prompt.empty() && s.description.empty())
+                s.description = screen_reader_->analyze(s.path, prompt);
+
+            std::string out = "Screenshot saved: " + s.path;
+            if (!s.description.empty()) out += "\n\n" + s.description;
+            int ms = static_cast<int>(std::chrono::duration_cast<
+                std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - t0).count());
+            return make_success(call, out, ms);
+        } catch (const std::exception& e) {
+            return make_error(call, ToolStatus::FAILURE,
+                "screenshot: " + std::string(e.what()));
+        }
+    }
+
+    ToolResult ToolExecutor::execute_click(const ToolCall& call) const {
+        if (!input_controller_)
+            return make_error(call, ToolStatus::FAILURE,
+                "click: computer use not initialised");
+        auto t0 = std::chrono::steady_clock::now();
+        try {
+            std::string desc = get_arg(call, "description", "");
+            int x = -1, y = -1;
+            std::string xs = get_arg(call, "x", "");
+            std::string ys = get_arg(call, "y", "");
+            if (!xs.empty()) x = std::stoi(xs);
+            if (!ys.empty()) y = std::stoi(ys);
+
+            if (!desc.empty() && (x < 0 || y < 0)) {
+                if (!screen_reader_)
+                    return make_error(call, ToolStatus::FAILURE,
+                        "click: screen_reader needed for element lookup");
+                auto pt = screen_reader_->find_element(desc);
+                if (!pt)
+                    return make_error(call, ToolStatus::FAILURE,
+                        "click: could not locate element: " + desc);
+                x = pt->x; y = pt->y;
+            }
+            if (x < 0 || y < 0)
+                return make_error(call, ToolStatus::FAILURE,
+                    "click: provide description or x/y coordinates");
+
+            bool dbl = (get_arg(call, "double_click", "false") == "true");
+            std::string btn = get_arg(call, "button", "left");
+            MouseButton mb = MouseButton::LEFT;
+            if (btn == "right")  mb = MouseButton::RIGHT;
+            if (btn == "middle") mb = MouseButton::MIDDLE;
+
+            if (dbl) input_controller_->mouse_click(x, y, mb, 2);
+            else     input_controller_->mouse_click(x, y, mb, 1);
+
+            int ms = static_cast<int>(std::chrono::duration_cast<
+                std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - t0).count());
+            std::string out = "Clicked at (" + std::to_string(x) + ", " +
+                              std::to_string(y) + ")";
+            if (!desc.empty()) out += " [" + desc + "]";
+            return make_success(call, out, ms);
+        } catch (const std::exception& e) {
+            return make_error(call, ToolStatus::FAILURE,
+                "click: " + std::string(e.what()));
+        }
+    }
+
+    ToolResult ToolExecutor::execute_type_text(const ToolCall& call) const {
+        if (!input_controller_)
+            return make_error(call, ToolStatus::FAILURE,
+                "type_text: computer use not initialised");
+        auto t0 = std::chrono::steady_clock::now();
+        try {
+            std::string text = get_arg(call, "text", "");
+            std::string key  = get_arg(call, "key",  "");
+            if (text.empty() && key.empty())
+                return make_error(call, ToolStatus::FAILURE,
+                    "type_text: provide text or key");
+            if (!key.empty())  input_controller_->send_key(key);
+            if (!text.empty()) input_controller_->type_text(text);
+            int ms = static_cast<int>(std::chrono::duration_cast<
+                std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - t0).count());
+            return make_success(call,
+                key.empty() ? "Typed: " + text : "Sent key: " + key, ms);
+        } catch (const std::exception& e) {
+            return make_error(call, ToolStatus::FAILURE,
+                "type_text: " + std::string(e.what()));
+        }
+    }
+
+    ToolResult ToolExecutor::execute_open_app(const ToolCall& call) const {
+        if (!app_controller_)
+            return make_error(call, ToolStatus::FAILURE,
+                "open_app: computer use not initialised");
+        auto t0 = std::chrono::steady_clock::now();
+        try {
+            std::string app = get_arg(call, "app", "");
+            if (app.empty())
+                return make_error(call, ToolStatus::FAILURE,
+                    "open_app: app name required");
+            bool focus = (get_arg(call, "focus", "false") == "true");
+            if (focus) {
+                auto info = app_controller_->get_app(app);
+                if (info) app_controller_->focus_app(app);
+                else      app_controller_->open_app(app);
+            } else {
+                app_controller_->open_app(app);
+            }
+            int ms = static_cast<int>(std::chrono::duration_cast<
+                std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - t0).count());
+            return make_success(call, "Opened: " + app, ms);
+        } catch (const std::exception& e) {
+            return make_error(call, ToolStatus::FAILURE,
+                "open_app: " + std::string(e.what()));
+        }
+    }
+
+    ToolResult ToolExecutor::execute_close_app(const ToolCall& call) const {
+        if (!app_controller_)
+            return make_error(call, ToolStatus::FAILURE,
+                "close_app: computer use not initialised");
+        auto t0 = std::chrono::steady_clock::now();
+        try {
+            std::string app = get_arg(call, "app", "");
+            if (app.empty())
+                return make_error(call, ToolStatus::FAILURE,
+                    "close_app: app name required");
+            app_controller_->close_app(app);
+            int ms = static_cast<int>(std::chrono::duration_cast<
+                std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - t0).count());
+            return make_success(call, "Closed: " + app, ms);
+        } catch (const std::exception& e) {
+            return make_error(call, ToolStatus::FAILURE,
+                "close_app: " + std::string(e.what()));
+        }
+    }
+
+    ToolResult ToolExecutor::execute_browser(const ToolCall& call) const {
+        if (!browser_controller_)
+            return make_error(call, ToolStatus::FAILURE,
+                "browser: browser controller not initialised");
+        auto t0 = std::chrono::steady_clock::now();
+        try {
+            std::string action   = get_arg(call, "action", "");
+            std::string url      = get_arg(call, "url", "");
+            std::string selector = get_arg(call, "selector", "");
+            std::string text     = get_arg(call, "text", "");
+            std::string script   = get_arg(call, "script", "");
+            int scroll_y = 0;
+            std::string sy = get_arg(call, "scroll_y", "");
+            if (!sy.empty()) scroll_y = std::stoi(sy);
+
+            // BrowserController uses BrowserAction enum — build action and call execute()
+            BrowserAction ba;
+            ba.url         = url;
+            ba.selector    = selector;
+            ba.text        = text.empty() ? script : text;
+            ba.timeout_ms  = 0;
+
+            if      (action == "navigate")    ba.type = BrowserActionType::NAVIGATE;
+            else if (action == "click")       ba.type = BrowserActionType::CLICK;
+            else if (action == "click_text")  { ba.type = BrowserActionType::CLICK; ba.description = text; }
+            else if (action == "type")        ba.type = BrowserActionType::TYPE;
+            else if (action == "scroll")      ba.type = BrowserActionType::SCROLL;
+            else if (action == "get_content") ba.type = BrowserActionType::GET_CONTENT;
+            else if (action == "screenshot")  ba.type = BrowserActionType::SCREENSHOT;
+            else if (action == "execute_js")  { ba.type = BrowserActionType::EXECUTE_JS; ba.text = script; }
+            else if (action == "new_tab")     ba.type = BrowserActionType::NEW_TAB;
+            else if (action == "close_tab")   ba.type = BrowserActionType::CLOSE_TAB;
+            else if (action == "back")        ba.type = BrowserActionType::BACK;
+            else if (action == "forward")     ba.type = BrowserActionType::FORWARD;
+            else if (action == "reload")      ba.type = BrowserActionType::RELOAD;
+            else return make_error(call, ToolStatus::FAILURE,
+                "browser: unknown action: " + action);
+
+            BrowserResult br = browser_controller_->execute(ba);
+            if (!br.success)
+                return make_error(call, ToolStatus::FAILURE,
+                    "browser: " + br.error_message);
+            std::string result = br.content.empty() ? br.url : br.content;
+            if (!br.screenshot_path.empty()) result += "\nScreenshot: " + br.screenshot_path;
+
+            int ms = static_cast<int>(std::chrono::duration_cast<
+                std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - t0).count());
+            return make_success(call, result, ms);
+        } catch (const std::exception& e) {
+            return make_error(call, ToolStatus::FAILURE,
+                "browser: " + std::string(e.what()));
+        }
+    }
+
+    ToolResult ToolExecutor::execute_shell_run(const ToolCall& call) const {
+        if (!shell_executor_)
+            return make_error(call, ToolStatus::FAILURE,
+                "shell_run: shell executor not initialised");
+        auto t0 = std::chrono::steady_clock::now();
+        try {
+            std::string cmd = get_arg(call, "command", "");
+            if (cmd.empty())
+                return make_error(call, ToolStatus::FAILURE,
+                    "shell_run: command required");
+            int timeout = 0;
+            std::string ts = get_arg(call, "timeout_seconds", "");
+            if (!ts.empty()) timeout = std::stoi(ts);
+            std::string working_dir = get_arg(call, "working_dir", "");
+
+            auto result = shell_executor_->run(cmd, timeout, working_dir);
+            int ms = static_cast<int>(std::chrono::duration_cast<
+                std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - t0).count());
+
+            if (!result.success)
+                return make_error(call, ToolStatus::FAILURE,
+                    "shell_run: " + result.stderr_text);
+
+            std::string out = result.stdout_text;
+            if (!result.stderr_text.empty())
+                out += "\n[stderr]: " + result.stderr_text;
+            return make_success(call, out, ms);
+        } catch (const std::exception& e) {
+            return make_error(call, ToolStatus::FAILURE,
+                "shell_run: " + std::string(e.what()));
+        }
+    }
+
+    ToolResult ToolExecutor::execute_file_ops(const ToolCall& call) const {
+        if (!file_manager_)
+            return make_error(call, ToolStatus::FAILURE,
+                "file_ops: file manager not initialised");
+        auto t0 = std::chrono::steady_clock::now();
+        try {
+            std::string action = get_arg(call, "action", "");
+            std::string path   = get_arg(call, "path",   "");
+            std::string dest   = get_arg(call, "dest",   "");
+            bool recursive = (get_arg(call, "recursive", "false") == "true");
+
+            FileOpResult fr;
+            if      (action == "list")   fr = file_manager_->list(path, recursive);
+            else if (action == "move")   fr = file_manager_->move(path, dest);
+            else if (action == "copy")   fr = file_manager_->copy(path, dest);
+            else if (action == "delete") fr = file_manager_->remove(path);
+            else if (action == "mkdir")  fr = file_manager_->mkdir(path);
+            else if (action == "stat")   fr = file_manager_->stat(path);
+            else if (action == "exists") {
+                bool ex = file_manager_->exists(path);
+                fr.success = true;
+                fr.error_message = ex ? "true" : "false";
+            }
+            else return make_error(call, ToolStatus::FAILURE,
+                "file_ops: unknown action: " + action);
+
+            if (!fr.success)
+                return make_error(call, ToolStatus::FAILURE,
+                    "file_ops: " + fr.error_message);
+
+            // Format result string
+            std::string result;
+            if (action == "list") {
+                result = std::to_string(fr.entries.size()) + " entries:\n";
+                for (const auto& e : fr.entries)
+                    result += (e.is_dir ? "d " : "f ") + e.name +
+                              "  " + e.permissions + "  " + e.modified_at + "\n";
+            } else if (action == "exists") {
+                result = fr.error_message; // "true" or "false"
+            } else if (action == "stat") {
+                if (!fr.entries.empty()) {
+                    const auto& e = fr.entries[0];
+                    result = e.path + "\ntype: " + (e.is_dir ? "directory" : "file") +
+                             "\npermissions: " + e.permissions +
+                             "\nmodified: " + e.modified_at;
+                }
+            } else {
+                result = "OK: " + (fr.dest_path.empty() ? path : fr.dest_path);
+            }
+
+            int ms = static_cast<int>(std::chrono::duration_cast<
+                std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - t0).count());
+            return make_success(call, result, ms);
+        } catch (const std::exception& e) {
+            return make_error(call, ToolStatus::FAILURE,
+                "file_ops: " + std::string(e.what()));
+        }
+    }
+
+    ToolResult ToolExecutor::execute_system_control(const ToolCall& call) const {
+        if (!system_controller_)
+            return make_error(call, ToolStatus::FAILURE,
+                "system_control: system controller not initialised");
+        auto t0 = std::chrono::steady_clock::now();
+        try {
+            std::string action = get_arg(call, "action", "");
+            std::string value  = get_arg(call, "value",  "");
+
+            std::string result;
+            if (action == "get_state") {
+                SystemState ss = system_controller_->get_state();
+                result  = "volume=" + std::to_string(ss.volume_pct) + "%";
+                result += " muted=" + std::string(ss.muted ? "true" : "false");
+                result += " brightness=" + std::to_string(ss.brightness_pct) + "%";
+                result += " wifi=" + std::string(ss.wifi_enabled ? "on" : "off");
+                if (!ss.wifi_ssid.empty()) result += "(" + ss.wifi_ssid + ")";
+                result += " bluetooth=" + std::string(ss.bluetooth_enabled ? "on" : "off");
+            } else if (action == "set_volume") {
+                bool ok = system_controller_->set_volume(std::stoi(value));
+                result = ok ? "Volume set to " + value + "%" : "set_volume failed";
+            } else if (action == "set_mute") {
+                bool ok = system_controller_->set_mute(value == "true");
+                result = ok ? std::string(value == "true" ? "Muted" : "Unmuted") : "set_mute failed";
+            } else if (action == "set_brightness") {
+                bool ok = system_controller_->set_brightness(std::stoi(value));
+                result = ok ? "Brightness set to " + value + "%" : "set_brightness failed";
+            } else if (action == "set_wifi") {
+                bool ok = system_controller_->set_wifi(value == "true");
+                result = ok ? "WiFi " + std::string(value == "true" ? "enabled" : "disabled") : "set_wifi failed";
+            } else if (action == "set_bluetooth") {
+                bool ok = system_controller_->set_bluetooth(value == "true");
+                result = ok ? "Bluetooth " + std::string(value == "true" ? "enabled" : "disabled") : "set_bluetooth failed";
+            } else if (action == "set_notifications") {
+                bool ok = system_controller_->set_notifications(value == "true");
+                result = ok ? "Notifications " + std::string(value == "true" ? "enabled" : "disabled") : "set_notifications failed";
+            } else return make_error(call, ToolStatus::FAILURE,
+                "system_control: unknown action: " + action);
+
+            int ms = static_cast<int>(std::chrono::duration_cast<
+                std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - t0).count());
+            return make_success(call, result, ms);
+        } catch (const std::exception& e) {
+            return make_error(call, ToolStatus::FAILURE,
+                "system_control: " + std::string(e.what()));
+        }
+    }
+
+    ToolResult ToolExecutor::execute_email(const ToolCall& call) const {
+        if (!email_controller_)
+            return make_error(call, ToolStatus::FAILURE,
+                "email: email controller not initialised");
+        auto t0 = std::chrono::steady_clock::now();
+        try {
+            std::string action = get_arg(call, "action", "");
+            std::string result;
+
+            if (action == "read") {
+                EmailQuery req;
+                req.folder           = get_arg(call, "folder", "INBOX");
+                req.subject_contains = get_arg(call, "subject", "");
+                req.from_contains    = get_arg(call, "from", "");
+                req.unread_only      = (get_arg(call, "unread_only", "false") == "true");
+                std::string mr       = get_arg(call, "max_results", "10");
+                req.max_results      = mr.empty() ? 10 : std::stoi(mr);
+                auto msgs = email_controller_->read(req);
+                result = std::to_string(msgs.size()) + " message(s):\n";
+                for (const auto& m : msgs) {
+                    result += "From: " + m.from + "\n";
+                    result += "Subject: " + m.subject + "\n";
+                    result += "Date: " + m.date + "\n";
+                    if (!m.body_text.empty())
+                        result += m.body_text.substr(0, 500) + "\n";
+                    result += "---\n";
+                }
+            } else if (action == "send") {
+                EmailSendRequest req;
+                std::string to_str = get_arg(call, "to", "");
+                if (to_str.empty())
+                    return make_error(call, ToolStatus::FAILURE,
+                        "email: 'to' required for send");
+                req.to.push_back(to_str);
+                req.subject = get_arg(call, "send_subject", "");
+                req.body    = get_arg(call, "body", "");
+                bool ok = email_controller_->send(req);
+                result = ok ? "Email sent to " + to_str : "send failed";
+            } else {
+                return make_error(call, ToolStatus::FAILURE,
+                    "email: unknown action: " + action);
+            }
+
+            int ms = static_cast<int>(std::chrono::duration_cast<
+                std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - t0).count());
+            return make_success(call, result, ms);
+        } catch (const std::exception& e) {
+            return make_error(call, ToolStatus::FAILURE,
+                "email: " + std::string(e.what()));
+        }
+    }
+
+    ToolResult ToolExecutor::execute_watch_screen(const ToolCall& call) const {
+        if (!screen_reader_)
+            return make_error(call, ToolStatus::FAILURE,
+                "watch_screen: computer use not initialised");
+        auto t0 = std::chrono::steady_clock::now();
+        try {
+            std::string wait_for = get_arg(call, "wait_for", "");
+            int timeout = 30;
+            int poll    = 2;
+            std::string ts = get_arg(call, "timeout_seconds", "");
+            std::string ps = get_arg(call, "poll_seconds", "");
+            if (!ts.empty()) timeout = std::stoi(ts);
+            if (!ps.empty()) poll    = std::stoi(ps);
+            bool analyze = (get_arg(call, "analyze", "true") != "false");
+
+            auto s0 = screen_reader_->capture(false);
+            auto deadline = std::chrono::steady_clock::now() +
+                            std::chrono::seconds(timeout);
+
+            while (std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::sleep_for(std::chrono::seconds(poll));
+                auto s1 = screen_reader_->capture(false);
+                if (s1.path != s0.path) {
+                    std::string out = "Screen changed after " +
+                        std::to_string(static_cast<int>(
+                            std::chrono::duration_cast<std::chrono::seconds>(
+                                std::chrono::steady_clock::now() - t0).count()))
+                        + "s";
+                    if (analyze) {
+                        std::string desc = screen_reader_->analyze(
+                            s1.path,
+                            wait_for.empty() ? "Describe what changed on the screen"
+                                             : "Did this happen: " + wait_for +
+                                               "? Describe what you see.");
+                        if (!desc.empty()) out += "\n" + desc;
+                    }
+                    int ms = static_cast<int>(std::chrono::duration_cast<
+                        std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - t0).count());
+                    return make_success(call, out, ms);
+                }
+                s0 = s1;
+            }
+            return make_error(call, ToolStatus::TIMEOUT,
+                "watch_screen: timed out after " + std::to_string(timeout) + "s");
+        } catch (const std::exception& e) {
+            return make_error(call, ToolStatus::FAILURE,
+                "watch_screen: " + std::string(e.what()));
+        }
+    }
+
+    // =========================================================================
+    // v1.5.0 — Scheduler tool implementation
+    // =========================================================================
+
+    ToolResult ToolExecutor::execute_schedule_task(const ToolCall& call) const {
+        if (!scheduler_)
+            return make_error(call, ToolStatus::FAILURE,
+                "schedule_task: scheduler not initialised");
+        auto t0 = std::chrono::steady_clock::now();
+        try {
+            std::string action = get_arg(call, "action", "");
+            std::string result;
+
+            if (action == "create") {
+                std::string desc = get_arg(call, "description", "");
+                if (desc.empty())
+                    return make_error(call, ToolStatus::FAILURE,
+                        "schedule_task: description required for create");
+                auto pr = scheduler_->create_task_from_nl(desc, "");
+                if (!pr.success) {
+                    if (!pr.clarification_needed.empty())
+                        result = "Clarification needed: " + pr.clarification_needed;
+                    else
+                        result = "Failed to parse task: " + pr.error_message;
+                } else {
+                    result = "Task created: '" + pr.task.name +
+                             "' (id=" + pr.task.id + ")";
+                }
+            } else if (action == "list") {
+                auto tasks = scheduler_->list_tasks();
+                if (tasks.empty()) {
+                    result = "No scheduled tasks.";
+                } else {
+                    result = std::to_string(tasks.size()) + " task(s):\n";
+                    for (const auto& t : tasks)
+                        result += "  - [" + t.id.substr(0, 8) + "] " + t.name +
+                                  " (" + (t.enabled ? "enabled" : "disabled") + ")\n";
+                }
+            } else if (action == "enable" || action == "disable") {
+                std::string id = get_arg(call, "task_id", "");
+                if (id.empty())
+                    return make_error(call, ToolStatus::FAILURE,
+                        "schedule_task: task_id required for " + action);
+                bool ok = (action == "enable") ? scheduler_->enable_task(id)
+                                               : scheduler_->disable_task(id);
+                result = ok ? "Task " + action + "d: " + id
+                            : "Task not found: " + id;
+            } else if (action == "delete") {
+                std::string id = get_arg(call, "task_id", "");
+                if (id.empty())
+                    return make_error(call, ToolStatus::FAILURE,
+                        "schedule_task: task_id required for delete");
+                bool ok = scheduler_->delete_task(id);
+                result = ok ? "Task deleted: " + id : "Task not found: " + id;
+            } else if (action == "run_now") {
+                std::string id = get_arg(call, "task_id", "");
+                if (id.empty())
+                    return make_error(call, ToolStatus::FAILURE,
+                        "schedule_task: task_id required for run_now");
+                std::string run_id = scheduler_->run_task_now(id);
+                result = "Task dispatched, run_id=" + run_id;
+            } else {
+                return make_error(call, ToolStatus::FAILURE,
+                    "schedule_task: unknown action: " + action);
+            }
+
+            int ms = static_cast<int>(std::chrono::duration_cast<
+                std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - t0).count());
+            return make_success(call, result, ms);
+        } catch (const std::exception& e) {
+            return make_error(call, ToolStatus::FAILURE,
+                "schedule_task: " + std::string(e.what()));
+        }
+    }
+
 
 } // namespace cardinal

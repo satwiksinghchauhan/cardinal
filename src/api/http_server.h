@@ -1,47 +1,32 @@
-// SPDX-License-Identifier: AGPL-3.0-only
-// SPDX-FileCopyrightText: Copyright (C) 2026 Satwik Singh (Cardinal AGI)
 #pragma once
 // =============================================================================
-// Cardinal - HTTP Server
+// Cardinal - HTTP Server (v1.5.0)
 // File: src/api/http_server.h
 //
-// Local HTTP server exposing CardinalAPI to TypeScript (Interface 2)
-// and any other external consumers.
+// Changes from v1.4.0:
+//   - Scheduler endpoints (9 routes)
+//   - Computer use endpoints (5 routes)
+//   - New JSON serialization helpers for v1.5.0 types
 //
-// Built on cpp-httplib (already linked). All responses are JSON.
-// Streaming uses Server-Sent Events (SSE) over chunked HTTP.
+// New endpoints:
+//   GET    /api/scheduler/status
+//   GET    /api/scheduler/tasks
+//   POST   /api/scheduler/tasks          (NL create)
+//   GET    /api/scheduler/tasks/:id
+//   PUT    /api/scheduler/tasks/:id
+//   DELETE /api/scheduler/tasks/:id
+//   POST   /api/scheduler/tasks/:id/run
+//   POST   /api/scheduler/tasks/:id/enable
+//   POST   /api/scheduler/tasks/:id/disable
+//   GET    /api/scheduler/tasks/:id/history
+//   GET    /api/scheduler/runs
+//   GET    /api/scheduler/runs/:id/actions
 //
-// Lifecycle:
-//   HttpServer server(api);
-//   server.start();   // Blocks until stop() is called from another thread
-//   server.stop();    // Called from signal handler or shutdown sequence
-//
-// Authentication:
-//   When config.api.auth_enabled is true, all requests must include:
-//   Authorization: Bearer <api_key>
-//   Requests without a valid key receive 401 Unauthorized.
-//   Health check endpoint (/api/health) is always public.
-//
-// Endpoints:
-//   GET  /api/health           -- alive check (always public)
-//   POST /api/chat             -- send message, get response or SSE stream
-//   POST /api/reset            -- reset session history
-//   GET  /api/stats            -- system stats
-//   GET  /api/rules            -- rule store contents
-//   GET  /api/episodes         -- episode query
-//   POST /api/scan             -- run contradiction scan
-//   POST /api/maintenance      -- run maintenance cycle
-//   GET  /api/settings         -- get current settings
-//   POST /api/settings         -- update settings (partial JSON accepted)
-//   POST /api/export           -- export training data
-//   POST /api/sessions         -- create session
-//   DELETE /api/sessions/:id   -- destroy session
-//   POST /api/sessions/:id/reset -- reset session
-//
-// SSE Streaming (POST /api/chat with Accept: text/event-stream):
-//   Each token:  data: {"token":"...","is_final":false}\n\n
-//   Final token: data: {"token":"","is_final":true,"feeling":{...},"episode_id":"..."}\n\n
-//   On error:    data: {"error":"..."}\n\n
+//   GET    /api/computer/status
+//   POST   /api/computer/screenshot
+//   POST   /api/computer/click
+//   POST   /api/computer/type
+//   POST   /api/computer/shell
 // =============================================================================
 
 #pragma once
@@ -56,7 +41,9 @@
 
 #include "api/cardinal_api.h"
 #include "utils/config_loader.h"
-#include "self_model/self_model_types.h"   // SelfImprovementStatus, ReflectionResult
+#include "self_model/self_model_types.h"
+#include "scheduler/scheduler_types.h"
+#include "computer/computer_types.h"
 
 #include <string>
 #include <atomic>
@@ -64,7 +51,6 @@
 #include <memory>
 #include <functional>
 
-// Forward declare httplib types to avoid polluting headers
 namespace httplib {
     class Server;
     struct Request;
@@ -73,32 +59,18 @@ namespace httplib {
 
 namespace cardinal {
 
-    // =========================================================================
-    // HttpServer
-    // =========================================================================
     class HttpServer {
     public:
         explicit HttpServer(CardinalAPI& api, const CardinalConfig& config);
         ~HttpServer();
 
-        // Not copyable
-        HttpServer(const HttpServer&) = delete;
+        HttpServer(const HttpServer&)            = delete;
         HttpServer& operator=(const HttpServer&) = delete;
 
-        // -- Lifecycle --
-
-        // Start the server. Blocks until stop() is called.
-        // Call this from a dedicated thread if you want non-blocking behavior:
-        //   std::thread t([&]{ server.start(); });
-        // Returns false if server fails to bind to host:port.
         bool start();
-
-        // Stop the server. Safe to call from any thread.
         void stop();
-
         bool is_running() const { return running_.load(); }
 
-        // -- Config --
         const std::string& host() const { return host_; }
         int                port() const { return port_; }
 
@@ -106,13 +78,10 @@ namespace cardinal {
         // -- Route registration --
         void register_routes();
 
-        // -- Auth middleware --
-        // Returns true if request is authorized (or auth is disabled).
-        // Sets response to 401 and returns false if unauthorized.
-        bool check_auth(const httplib::Request& req,
-            httplib::Response& res) const;
+        // -- Auth --
+        bool check_auth(const httplib::Request& req, httplib::Response& res) const;
 
-        // -- Route handlers --
+        // -- Existing route handlers (v1.4.0, unchanged) --
         void handle_health(const httplib::Request& req, httplib::Response& res);
         void handle_chat(const httplib::Request& req, httplib::Response& res);
         void handle_reset(const httplib::Request& req, httplib::Response& res);
@@ -127,34 +96,39 @@ namespace cardinal {
         void handle_create_session(const httplib::Request& req, httplib::Response& res);
         void handle_destroy_session(const httplib::Request& req, httplib::Response& res);
         void handle_reset_session(const httplib::Request& req, httplib::Response& res);
-
-        // v1.4.0 — Self-Improvement
         void handle_self_model(const httplib::Request& req, httplib::Response& res);
-        void handle_reflect   (const httplib::Request& req, httplib::Response& res);
-        void handle_train     (const httplib::Request& req, httplib::Response& res);
+        void handle_reflect(const httplib::Request& req, httplib::Response& res);
+        void handle_train(const httplib::Request& req, httplib::Response& res);
+
+        // -- Scheduler handlers (new in v1.5.0) --
+        void handle_scheduler_status  (const httplib::Request& req, httplib::Response& res);
+        void handle_scheduler_tasks_list(const httplib::Request& req, httplib::Response& res);
+        void handle_scheduler_task_create(const httplib::Request& req, httplib::Response& res);
+        void handle_scheduler_task_get  (const httplib::Request& req, httplib::Response& res);
+        void handle_scheduler_task_put  (const httplib::Request& req, httplib::Response& res);
+        void handle_scheduler_task_delete(const httplib::Request& req, httplib::Response& res);
+        void handle_scheduler_task_run  (const httplib::Request& req, httplib::Response& res);
+        void handle_scheduler_task_enable(const httplib::Request& req, httplib::Response& res);
+        void handle_scheduler_task_disable(const httplib::Request& req, httplib::Response& res);
+        void handle_scheduler_task_history(const httplib::Request& req, httplib::Response& res);
+        void handle_scheduler_runs_list (const httplib::Request& req, httplib::Response& res);
+        void handle_scheduler_run_actions(const httplib::Request& req, httplib::Response& res);
+
+        // -- Computer use handlers (new in v1.5.0) --
+        void handle_computer_status    (const httplib::Request& req, httplib::Response& res);
+        void handle_computer_screenshot(const httplib::Request& req, httplib::Response& res);
+        void handle_computer_click     (const httplib::Request& req, httplib::Response& res);
+        void handle_computer_type      (const httplib::Request& req, httplib::Response& res);
+        void handle_computer_shell     (const httplib::Request& req, httplib::Response& res);
 
         // -- JSON response helpers --
-
-        // Send a success JSON response
-        static void send_ok(httplib::Response& res,
-            const std::string& json_body);
-
-        // Send an error JSON response
-        static void send_error(httplib::Response& res,
-            int                http_code,
-            CardinalStatus     status,
-            const std::string& message);
-
-        // Serialize CardinalStatus + message to JSON error body
-        static std::string error_json(CardinalStatus     status,
-            const std::string& message);
-
-        // -- SSE helpers --
-
-        // Format a single SSE event line
+        static void        send_ok(httplib::Response& res, const std::string& json_body);
+        static void        send_error(httplib::Response& res, int http_code,
+                                      CardinalStatus status, const std::string& message);
+        static std::string error_json(CardinalStatus status, const std::string& message);
         static std::string sse_event(const std::string& json_data);
 
-        // -- JSON serialization helpers --
+        // -- Existing serializers (v1.4.0) --
         static std::string feeling_to_json(const FeelingInfo& f);
         static std::string chat_response_to_json(const ChatResponse& r);
         static std::string stats_to_json(const SystemStats& s);
@@ -167,22 +141,34 @@ namespace cardinal {
         static std::string self_improvement_status_to_json(const SelfImprovementStatus& s);
         static std::string reflection_result_to_json(const ReflectionResult& r);
 
+        // -- New serializers (v1.5.0) --
+        static std::string scheduler_status_to_json(const SchedulerStatus& s);
+        static std::string scheduled_task_to_json(const ScheduledTask& t);
+        static std::string task_run_to_json(const TaskRun& r);
+        static std::string task_action_log_to_json(const TaskActionLog& e);
+        static std::string task_parse_result_to_json(const TaskParseResult& r);
+        static std::string screen_info_to_json(const ScreenInfo& s);
+        static std::string screenshot_to_json(const Screenshot& s);
+        static std::string shell_result_to_json(const ShellResult& r);
+
+        // -- Trigger/action serialization helpers --
+        static std::string trigger_spec_to_json(const TriggerSpec& t);
+        static std::string task_action_to_json(const TaskAction& a);
+        static TriggerSpec  trigger_spec_from_json(const std::string& json);
+        static TaskAction   task_action_from_json(const std::string& json);
+
         // -- Members --
-        CardinalAPI& api_;
+        CardinalAPI&          api_;
         const CardinalConfig& config_;
         std::unique_ptr<httplib::Server> server_;
 
-        std::string                host_;
-        int                        port_;
-        bool                       auth_enabled_;
-        std::string                api_key_;
-
-        std::atomic<bool>          running_{ false };
+        std::string       host_;
+        int               port_;
+        bool              auth_enabled_;
+        std::string       api_key_;
+        std::atomic<bool> running_{ false };
     };
 
-    // =========================================================================
-    // HttpServerError
-    // =========================================================================
     class HttpServerError : public std::runtime_error {
     public:
         explicit HttpServerError(const std::string& message)

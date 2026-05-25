@@ -1,12 +1,31 @@
-// SPDX-License-Identifier: AGPL-3.0-only
-// SPDX-FileCopyrightText: Copyright (C) 2026 Satwik Singh (Cardinal AGI)
 // =============================================================================
-// Cardinal - Tool Registry Implementation
+// Cardinal - Tool Registry Implementation (v1.5.0)
 // File: src/tools/tool_registry.cpp
+//
+// Changes from v1.4.0:
+//   - Added computer use tool includes
+//   - init() calls register_builtin_computer_tools() when computer_use.enabled
+//   - init() calls register_builtin_schedule_task() when scheduler.enabled
+//   - register_builtin_computer_tools() added
+//   - register_builtin_schedule_task() added
 // =============================================================================
 
 #include "tools/tool_registry.h"
 #include "utils/logger.h"
+
+// v1.5.0 — computer use tool headers
+#include "tools/builtin/computer/tool_screenshot.h"
+#include "tools/builtin/computer/tool_click.h"
+#include "tools/builtin/computer/tool_type_text.h"
+#include "tools/builtin/computer/tool_open_app.h"
+#include "tools/builtin/computer/tool_close_app.h"
+#include "tools/builtin/computer/tool_browser.h"
+#include "tools/builtin/computer/tool_shell_run.h"
+#include "tools/builtin/computer/tool_file_ops.h"
+#include "tools/builtin/computer/tool_system_control.h"
+#include "tools/builtin/computer/tool_email.h"
+#include "tools/builtin/computer/tool_watch_screen.h"
+#include "tools/builtin/computer/tool_schedule_task.h"
 
 #include <nlohmann/json.hpp>
 #include <sstream>
@@ -28,16 +47,22 @@ namespace cardinal {
 
         const auto& tc = config_.tools;
 
-        if (tc.web_search.enabled)         register_builtin_web_search();
-        if (tc.web_fetch.enabled)          register_builtin_web_fetch();
-        if (tc.calculator.enabled)         register_builtin_calculator();
-        if (tc.run_python.enabled)         register_builtin_run_python();
-        if (tc.file_read.enabled)          register_builtin_file_read();
-        if (tc.file_write.enabled)         register_builtin_file_write();
-        if (tc.knowledge_graph.enabled)    register_builtin_kg_query();
-        if (tc.episodic_search.enabled)    register_builtin_episodic_search();
+        if (tc.web_search.enabled)          register_builtin_web_search();
+        if (tc.web_fetch.enabled)           register_builtin_web_fetch();
+        if (tc.calculator.enabled)          register_builtin_calculator();
+        if (tc.run_python.enabled)          register_builtin_run_python();
+        if (tc.file_read.enabled)           register_builtin_file_read();
+        if (tc.file_write.enabled)          register_builtin_file_write();
+        if (tc.knowledge_graph.enabled)     register_builtin_kg_query();
+        if (tc.episodic_search.enabled)     register_builtin_episodic_search();
         // Vision tool — only register if model is configured
         if (!config_.vision.model_path.empty()) register_builtin_analyze_image();
+
+        // v1.5.0 — computer use tools (requires computer_use.enabled in config)
+        if (config_.computer_use.enabled)   register_builtin_computer_tools();
+
+        // v1.5.0 — scheduler tool (works headless, no display needed)
+        if (config_.scheduler.enabled)      register_builtin_schedule_task();
 
         LOG_INFO("ToolRegistry: " + std::to_string(tools_.size()) +
                  " tools registered");
@@ -404,6 +429,48 @@ namespace cardinal {
         });
 
         register_tool(def);
+    }
+
+    // =========================================================================
+    // v1.5.0 — Computer use tool registration
+    // =========================================================================
+
+    void ToolRegistry::register_builtin_computer_tools() {
+        LOG_INFO("ToolRegistry: registering computer use tools...");
+
+        register_tool(make_screenshot_tool_def(config_));
+        register_tool(make_click_tool_def(config_));
+        register_tool(make_type_text_tool_def(config_));
+        register_tool(make_open_app_tool_def(config_));
+        register_tool(make_close_app_tool_def(config_));
+
+        // Browser only if venv is configured
+        if (!config_.computer_use.browser.venv_path.empty())
+            register_tool(make_browser_tool_def(config_));
+
+        // Shell only if enabled
+        if (config_.computer_use.shell.enabled)
+            register_tool(make_shell_run_tool_def(config_));
+
+        register_tool(make_file_ops_tool_def(config_));
+        register_tool(make_system_control_tool_def(config_));
+
+        // Email only if enabled
+        if (config_.computer_use.email.enabled)
+            register_tool(make_email_tool_def(config_));
+
+        register_tool(make_watch_screen_tool_def(config_));
+
+        LOG_INFO("ToolRegistry: computer use tools registered");
+    }
+
+    // =========================================================================
+    // v1.5.0 — Scheduler tool registration
+    // =========================================================================
+
+    void ToolRegistry::register_builtin_schedule_task() {
+        register_tool(make_schedule_task_tool_def(config_));
+        LOG_DEBUG("ToolRegistry: registered tool 'schedule_task'");
     }
 
 } // namespace cardinal
