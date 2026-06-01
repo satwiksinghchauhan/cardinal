@@ -1,5 +1,5 @@
 // =============================================================================
-// Cardinal - Main Entry Point (v1.6.0)
+// Cardinal - Main Entry Point (v2.0.0)
 // File: src/main.cpp
 //
 // Changes from v1.5.0:
@@ -36,7 +36,7 @@ static void print_banner(bool http_enabled,
 {
     std::cout << "\n";
     std::cout << "  +===========================================+\n";
-    std::cout << "  |         C A R D I N A L  v1.6.0           |\n";
+    std::cout << "  |         C A R D I N A L  v2.0.0           |\n";
     std::cout << "  |    Neurosymbolic AGI Architecture         |\n";
     std::cout << "  +===========================================+\n";
     std::cout << "\n";
