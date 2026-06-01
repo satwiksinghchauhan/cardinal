@@ -1,12 +1,12 @@
 // =============================================================================
-// Cardinal - HTTP Server Implementation (v1.5.0)
+// Cardinal - HTTP Server Implementation (v1.6.0)
 // File: src/api/http_server.cpp
 //
-// Changes from v1.4.0:
-//   - Scheduler endpoints registered in register_routes()
-//   - Computer use endpoints registered in register_routes()
-//   - All new handler implementations added
-//   - All new JSON serializer implementations added
+// Changes from v1.5.0:
+//   - Voice endpoints registered in register_routes()
+//   - handle_voice_* handlers implemented
+//   - voice_status_to_json() implemented
+//   - handle_health() version bumped to 1.6.0
 // =============================================================================
 
 #ifdef _WIN32
@@ -25,6 +25,7 @@
 
 #include <nlohmann/json.hpp>
 #include <sstream>
+#include <cstring>
 
 using json = nlohmann::json;
 
@@ -50,13 +51,11 @@ namespace cardinal {
             { "Access-Control-Allow-Origin",  "*" },
             { "Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS" },
             { "Access-Control-Allow-Headers",
-              "Content-Type, Authorization, Accept" }
+              "Content-Type, Authorization, Accept, X-Sample-Rate" }
         });
 
         server_->Options(".*", [](const httplib::Request&,
-            httplib::Response& res) {
-                res.status = 204;
-            });
+            httplib::Response& res) { res.status = 204; });
 
         register_routes();
         LOG_INFO("HttpServer configured on " + host_ + ":" + std::to_string(port_));
@@ -93,7 +92,7 @@ namespace cardinal {
     // =========================================================================
 
     void HttpServer::register_routes() {
-        // Health — always public
+        // Health — public
         server_->Get("/api/health",
             [this](const httplib::Request& req, httplib::Response& res) {
                 handle_health(req, res);
@@ -175,8 +174,7 @@ namespace cardinal {
                 handle_train(req, res);
             });
 
-        // v1.5.0 — Scheduler
-        // NOTE: more-specific patterns must be registered BEFORE less-specific ones
+        // v1.5.0 — Scheduler (specific patterns before generic)
         server_->Get("/api/scheduler/status",
             [this](const httplib::Request& req, httplib::Response& res) {
                 if (check_auth(req, res)) handle_scheduler_status(req, res);
@@ -247,6 +245,28 @@ namespace cardinal {
             [this](const httplib::Request& req, httplib::Response& res) {
                 if (check_auth(req, res)) handle_computer_shell(req, res);
             });
+
+        // v1.6.0 — Voice
+        server_->Get("/api/voice/status",
+            [this](const httplib::Request& req, httplib::Response& res) {
+                if (check_auth(req, res)) handle_voice_status(req, res);
+            });
+        server_->Post("/api/voice/enable",
+            [this](const httplib::Request& req, httplib::Response& res) {
+                if (check_auth(req, res)) handle_voice_enable(req, res);
+            });
+        server_->Post("/api/voice/disable",
+            [this](const httplib::Request& req, httplib::Response& res) {
+                if (check_auth(req, res)) handle_voice_disable(req, res);
+            });
+        server_->Post("/api/voice/speak",
+            [this](const httplib::Request& req, httplib::Response& res) {
+                if (check_auth(req, res)) handle_voice_speak(req, res);
+            });
+        server_->Post("/api/voice/transcribe",
+            [this](const httplib::Request& req, httplib::Response& res) {
+                if (check_auth(req, res)) handle_voice_transcribe(req, res);
+            });
     }
 
     // =========================================================================
@@ -280,7 +300,7 @@ namespace cardinal {
     }
 
     // =========================================================================
-    // Existing route handlers (v1.4.0, unchanged)
+    // Route handlers — v1.4.0 (unchanged)
     // =========================================================================
 
     void HttpServer::handle_health(const httplib::Request&,
@@ -290,7 +310,7 @@ namespace cardinal {
             json j;
             j["status"]  = "ok";
             j["uptime"]  = api_.uptime_string();
-            j["version"] = "1.5.0";
+            j["version"] = "1.6.0";
             send_ok(res, j.dump());
         } else {
             send_error(res, 503, result.status, result.error_message);
@@ -324,19 +344,17 @@ namespace cardinal {
 
         bool wants_stream = false;
         auto accept = req.get_header_value("Accept");
-        if (accept.find("text/event-stream") != std::string::npos)
-            wants_stream = true;
+        if (accept.find("text/event-stream") != std::string::npos) wants_stream = true;
         if (body.contains("stream") && body["stream"].is_boolean())
             wants_stream = body["stream"].get<bool>();
 
         if (wants_stream && config_.api.stream_enabled) {
-            res.set_header("Content-Type",    "text/event-stream");
-            res.set_header("Cache-Control",   "no-cache");
-            res.set_header("Connection",      "keep-alive");
+            res.set_header("Content-Type",      "text/event-stream");
+            res.set_header("Cache-Control",     "no-cache");
+            res.set_header("Connection",        "keep-alive");
             res.set_header("X-Accel-Buffering", "no");
 
             std::ostringstream sse_body;
-
             ApiStreamCallback cb = [&sse_body](const StreamToken& token) -> bool {
                 json t;
                 t["token"]    = token.token;
@@ -358,21 +376,16 @@ namespace cardinal {
             auto result = api_.chat_stream(session_id, message, cb);
             if (!result.ok())
                 sse_body << sse_event(error_json(result.status, result.error_message));
-
             res.status = 200;
             res.set_content(sse_body.str(), "text/event-stream");
         } else {
             auto result = api_.chat(session_id, message);
-            if (!result.ok()) {
-                send_error(res, 500, result.status, result.error_message);
-                return;
-            }
+            if (!result.ok()) { send_error(res, 500, result.status, result.error_message); return; }
             send_ok(res, chat_response_to_json(result.value));
         }
     }
 
-    void HttpServer::handle_reset(const httplib::Request& req,
-        httplib::Response& res) {
+    void HttpServer::handle_reset(const httplib::Request& req, httplib::Response& res) {
         if (!check_auth(req, res)) return;
         std::string session_id = "default";
         try {
@@ -386,16 +399,14 @@ namespace cardinal {
         send_ok(res, j.dump());
     }
 
-    void HttpServer::handle_stats(const httplib::Request& req,
-        httplib::Response& res) {
+    void HttpServer::handle_stats(const httplib::Request& req, httplib::Response& res) {
         if (!check_auth(req, res)) return;
         auto result = api_.get_stats();
         if (!result.ok()) { send_error(res, 500, result.status, result.error_message); return; }
         send_ok(res, stats_to_json(result.value));
     }
 
-    void HttpServer::handle_rules(const httplib::Request& req,
-        httplib::Response& res) {
+    void HttpServer::handle_rules(const httplib::Request& req, httplib::Response& res) {
         if (!check_auth(req, res)) return;
         auto result = api_.get_rules();
         if (!result.ok()) { send_error(res, 500, result.status, result.error_message); return; }
@@ -405,8 +416,7 @@ namespace cardinal {
         send_ok(res, j.dump());
     }
 
-    void HttpServer::handle_episodes(const httplib::Request& req,
-        httplib::Response& res) {
+    void HttpServer::handle_episodes(const httplib::Request& req, httplib::Response& res) {
         if (!check_auth(req, res)) return;
         std::string keyword, domain;
         float min_conf = 0.0f; int max_results = 20;
@@ -422,16 +432,14 @@ namespace cardinal {
         send_ok(res, j.dump());
     }
 
-    void HttpServer::handle_scan(const httplib::Request& req,
-        httplib::Response& res) {
+    void HttpServer::handle_scan(const httplib::Request& req, httplib::Response& res) {
         if (!check_auth(req, res)) return;
         auto result = api_.run_scan();
         if (!result.ok()) { send_error(res, 500, result.status, result.error_message); return; }
         send_ok(res, scan_result_to_json(result.value));
     }
 
-    void HttpServer::handle_maintenance(const httplib::Request& req,
-        httplib::Response& res) {
+    void HttpServer::handle_maintenance(const httplib::Request& req, httplib::Response& res) {
         if (!check_auth(req, res)) return;
         auto result = api_.run_maintenance();
         if (!result.ok()) { send_error(res, 500, result.status, result.error_message); return; }
@@ -439,16 +447,14 @@ namespace cardinal {
         send_ok(res, j.dump());
     }
 
-    void HttpServer::handle_get_settings(const httplib::Request& req,
-        httplib::Response& res) {
+    void HttpServer::handle_get_settings(const httplib::Request& req, httplib::Response& res) {
         if (!check_auth(req, res)) return;
         auto result = api_.get_settings();
         if (!result.ok()) { send_error(res, 500, result.status, result.error_message); return; }
         send_ok(res, settings_to_json(result.value));
     }
 
-    void HttpServer::handle_post_settings(const httplib::Request& req,
-        httplib::Response& res) {
+    void HttpServer::handle_post_settings(const httplib::Request& req, httplib::Response& res) {
         if (!check_auth(req, res)) return;
         if (req.body.empty()) {
             send_error(res, 400, CardinalStatus::INVALID_INPUT, "Request body is required");
@@ -456,10 +462,7 @@ namespace cardinal {
         }
         json body;
         try { body = json::parse(req.body); }
-        catch (...) {
-            send_error(res, 400, CardinalStatus::INVALID_INPUT, "Invalid JSON body");
-            return;
-        }
+        catch (...) { send_error(res, 400, CardinalStatus::INVALID_INPUT, "Invalid JSON body"); return; }
         for (const auto& [key, val] : body.items()) {
             std::string str_val;
             if (val.is_string())       str_val = val.get<std::string>();
@@ -467,18 +470,14 @@ namespace cardinal {
             else if (val.is_boolean()) str_val = val.get<bool>() ? "true" : "false";
             else continue;
             auto set_result = api_.set_setting(key, str_val);
-            if (!set_result.ok()) {
-                send_error(res, 400, set_result.status, set_result.error_message);
-                return;
-            }
+            if (!set_result.ok()) { send_error(res, 400, set_result.status, set_result.error_message); return; }
         }
         auto updated = api_.get_settings();
         if (!updated.ok()) { send_error(res, 500, updated.status, updated.error_message); return; }
         send_ok(res, settings_to_json(updated.value));
     }
 
-    void HttpServer::handle_export(const httplib::Request& req,
-        httplib::Response& res) {
+    void HttpServer::handle_export(const httplib::Request& req, httplib::Response& res) {
         if (!check_auth(req, res)) return;
         ExportRequest export_req;
         export_req.output_path    = "data/training_export.jsonl";
@@ -507,8 +506,7 @@ namespace cardinal {
         send_ok(res, export_info_to_json(result.value));
     }
 
-    void HttpServer::handle_create_session(const httplib::Request& req,
-        httplib::Response& res) {
+    void HttpServer::handle_create_session(const httplib::Request& req, httplib::Response& res) {
         if (!check_auth(req, res)) return;
         std::string requested_id;
         try {
@@ -522,30 +520,22 @@ namespace cardinal {
         send_ok(res, j.dump());
     }
 
-    void HttpServer::handle_destroy_session(const httplib::Request& req,
-        httplib::Response& res) {
+    void HttpServer::handle_destroy_session(const httplib::Request& req, httplib::Response& res) {
         if (!check_auth(req, res)) return;
         std::string session_id;
         if (req.matches.size() > 1) session_id = req.matches[1].str();
-        if (session_id.empty()) {
-            send_error(res, 400, CardinalStatus::INVALID_INPUT, "Session ID required in URL");
-            return;
-        }
+        if (session_id.empty()) { send_error(res, 400, CardinalStatus::INVALID_INPUT, "Session ID required in URL"); return; }
         auto result = api_.destroy_session(session_id);
         if (!result.ok()) { send_error(res, 404, result.status, result.error_message); return; }
         json j; j["status"] = "ok"; j["session_id"] = session_id; j["message"] = "Session destroyed";
         send_ok(res, j.dump());
     }
 
-    void HttpServer::handle_reset_session(const httplib::Request& req,
-        httplib::Response& res) {
+    void HttpServer::handle_reset_session(const httplib::Request& req, httplib::Response& res) {
         if (!check_auth(req, res)) return;
         std::string session_id;
         if (req.matches.size() > 1) session_id = req.matches[1].str();
-        if (session_id.empty()) {
-            send_error(res, 400, CardinalStatus::INVALID_INPUT, "Session ID required in URL");
-            return;
-        }
+        if (session_id.empty()) { send_error(res, 400, CardinalStatus::INVALID_INPUT, "Session ID required in URL"); return; }
         auto result = api_.reset_session(session_id);
         if (!result.ok()) { send_error(res, 404, result.status, result.error_message); return; }
         json j; j["status"] = "ok"; j["session_id"] = session_id; j["message"] = "Session history cleared";
@@ -556,24 +546,21 @@ namespace cardinal {
     // v1.4.0 — Self-Improvement handlers
     // =========================================================================
 
-    void HttpServer::handle_self_model(const httplib::Request& req,
-        httplib::Response& res) {
+    void HttpServer::handle_self_model(const httplib::Request& req, httplib::Response& res) {
         if (!check_auth(req, res)) return;
         auto result = api_.get_self_model_status();
         if (!result.ok()) { send_error(res, 500, result.status, result.error_message); return; }
         send_ok(res, self_improvement_status_to_json(result.value));
     }
 
-    void HttpServer::handle_reflect(const httplib::Request& req,
-        httplib::Response& res) {
+    void HttpServer::handle_reflect(const httplib::Request& req, httplib::Response& res) {
         if (!check_auth(req, res)) return;
         auto result = api_.reflect();
         if (!result.ok()) { send_error(res, 500, result.status, result.error_message); return; }
         send_ok(res, reflection_result_to_json(result.value));
     }
 
-    void HttpServer::handle_train(const httplib::Request& req,
-        httplib::Response& res) {
+    void HttpServer::handle_train(const httplib::Request& req, httplib::Response& res) {
         if (!check_auth(req, res)) return;
         std::string domain_hint;
         if (!req.body.empty()) {
@@ -597,30 +584,24 @@ namespace cardinal {
     // v1.5.0 — Scheduler handlers
     // =========================================================================
 
-    void HttpServer::handle_scheduler_status(const httplib::Request&,
-        httplib::Response& res) {
+    void HttpServer::handle_scheduler_status(const httplib::Request&, httplib::Response& res) {
         auto result = api_.get_scheduler_status();
         if (!result.ok()) { send_error(res, 503, result.status, result.message); return; }
         send_ok(res, scheduler_status_to_json(result.value));
     }
 
-    void HttpServer::handle_scheduler_tasks_list(const httplib::Request&,
-        httplib::Response& res) {
+    void HttpServer::handle_scheduler_tasks_list(const httplib::Request&, httplib::Response& res) {
         auto result = api_.list_tasks();
         if (!result.ok()) { send_error(res, 503, result.status, result.message); return; }
         json arr = json::array();
-        for (const auto& t : result.value)
-            arr.push_back(json::parse(scheduled_task_to_json(t)));
+        for (const auto& t : result.value) arr.push_back(json::parse(scheduled_task_to_json(t)));
         send_ok(res, arr.dump());
     }
 
-    void HttpServer::handle_scheduler_task_create(const httplib::Request& req,
-        httplib::Response& res) {
+    void HttpServer::handle_scheduler_task_create(const httplib::Request& req, httplib::Response& res) {
         json body;
         try { body = json::parse(req.body); }
-        catch (...) {
-            send_error(res, 400, CardinalStatus::INVALID_REQUEST, "Invalid JSON"); return;
-        }
+        catch (...) { send_error(res, 400, CardinalStatus::INVALID_REQUEST, "Invalid JSON"); return; }
         if (body.contains("description") && body["description"].is_string()) {
             auto result = api_.create_task(body["description"].get<std::string>(),
                                            body.value("session_id", std::string("")));
@@ -632,10 +613,8 @@ namespace cardinal {
             task.description  = body.value("description", "");
             task.enabled      = body.value("enabled", true);
             task.created_from = "api";
-            if (body.contains("trigger"))
-                task.trigger = trigger_spec_from_json(body["trigger"].dump());
-            if (body.contains("action"))
-                task.action = task_action_from_json(body["action"].dump());
+            if (body.contains("trigger")) task.trigger = trigger_spec_from_json(body["trigger"].dump());
+            if (body.contains("action"))  task.action  = task_action_from_json(body["action"].dump());
             auto result = api_.create_task_direct(task);
             if (!result.ok()) { send_error(res, 503, result.status, result.message); return; }
             json resp; resp["id"] = result.value; resp["success"] = true;
@@ -643,22 +622,18 @@ namespace cardinal {
         }
     }
 
-    void HttpServer::handle_scheduler_task_get(const httplib::Request& req,
-        httplib::Response& res) {
+    void HttpServer::handle_scheduler_task_get(const httplib::Request& req, httplib::Response& res) {
         std::string id = req.matches.size() > 1 ? req.matches[1].str() : "";
         auto result = api_.get_task(id);
         if (!result.ok()) { send_error(res, 404, result.status, result.message); return; }
         send_ok(res, scheduled_task_to_json(result.value));
     }
 
-    void HttpServer::handle_scheduler_task_put(const httplib::Request& req,
-        httplib::Response& res) {
+    void HttpServer::handle_scheduler_task_put(const httplib::Request& req, httplib::Response& res) {
         std::string id = req.matches.size() > 1 ? req.matches[1].str() : "";
         json body;
         try { body = json::parse(req.body); }
-        catch (...) {
-            send_error(res, 400, CardinalStatus::INVALID_REQUEST, "Invalid JSON"); return;
-        }
+        catch (...) { send_error(res, 400, CardinalStatus::INVALID_REQUEST, "Invalid JSON"); return; }
         auto existing = api_.get_task(id);
         if (!existing.ok()) { send_error(res, 404, existing.status, existing.message); return; }
         ScheduledTask task = existing.value;
@@ -671,8 +646,7 @@ namespace cardinal {
         send_ok(res, scheduled_task_to_json(task));
     }
 
-    void HttpServer::handle_scheduler_task_delete(const httplib::Request& req,
-        httplib::Response& res) {
+    void HttpServer::handle_scheduler_task_delete(const httplib::Request& req, httplib::Response& res) {
         std::string id = req.matches.size() > 1 ? req.matches[1].str() : "";
         auto result = api_.delete_task(id);
         if (!result.ok()) { send_error(res, 404, result.status, result.message); return; }
@@ -680,8 +654,7 @@ namespace cardinal {
         send_ok(res, resp.dump());
     }
 
-    void HttpServer::handle_scheduler_task_run(const httplib::Request& req,
-        httplib::Response& res) {
+    void HttpServer::handle_scheduler_task_run(const httplib::Request& req, httplib::Response& res) {
         std::string id = req.matches.size() > 1 ? req.matches[1].str() : "";
         auto result = api_.run_task_now(id);
         if (!result.ok()) { send_error(res, 503, result.status, result.message); return; }
@@ -689,8 +662,7 @@ namespace cardinal {
         send_ok(res, resp.dump());
     }
 
-    void HttpServer::handle_scheduler_task_enable(const httplib::Request& req,
-        httplib::Response& res) {
+    void HttpServer::handle_scheduler_task_enable(const httplib::Request& req, httplib::Response& res) {
         std::string id = req.matches.size() > 1 ? req.matches[1].str() : "";
         auto result = api_.enable_task(id);
         if (!result.ok()) { send_error(res, 404, result.status, result.message); return; }
@@ -698,8 +670,7 @@ namespace cardinal {
         send_ok(res, resp.dump());
     }
 
-    void HttpServer::handle_scheduler_task_disable(const httplib::Request& req,
-        httplib::Response& res) {
+    void HttpServer::handle_scheduler_task_disable(const httplib::Request& req, httplib::Response& res) {
         std::string id = req.matches.size() > 1 ? req.matches[1].str() : "";
         auto result = api_.disable_task(id);
         if (!result.ok()) { send_error(res, 404, result.status, result.message); return; }
@@ -707,8 +678,7 @@ namespace cardinal {
         send_ok(res, resp.dump());
     }
 
-    void HttpServer::handle_scheduler_task_history(const httplib::Request& req,
-        httplib::Response& res) {
+    void HttpServer::handle_scheduler_task_history(const httplib::Request& req, httplib::Response& res) {
         std::string id = req.matches.size() > 1 ? req.matches[1].str() : "";
         int limit = 50;
         if (req.has_param("limit")) try { limit = std::stoi(req.get_param_value("limit")); } catch (...) {}
@@ -719,8 +689,7 @@ namespace cardinal {
         send_ok(res, arr.dump());
     }
 
-    void HttpServer::handle_scheduler_runs_list(const httplib::Request& req,
-        httplib::Response& res) {
+    void HttpServer::handle_scheduler_runs_list(const httplib::Request& req, httplib::Response& res) {
         int limit = 100;
         if (req.has_param("limit")) try { limit = std::stoi(req.get_param_value("limit")); } catch (...) {}
         auto result = api_.get_recent_runs(limit);
@@ -730,8 +699,7 @@ namespace cardinal {
         send_ok(res, arr.dump());
     }
 
-    void HttpServer::handle_scheduler_run_actions(const httplib::Request& req,
-        httplib::Response& res) {
+    void HttpServer::handle_scheduler_run_actions(const httplib::Request& req, httplib::Response& res) {
         std::string id = req.matches.size() > 1 ? req.matches[1].str() : "";
         auto result = api_.get_run_action_logs(id);
         if (!result.ok()) { send_error(res, 503, result.status, result.message); return; }
@@ -744,50 +712,38 @@ namespace cardinal {
     // v1.5.0 — Computer Use handlers
     // =========================================================================
 
-    void HttpServer::handle_computer_status(const httplib::Request&,
-        httplib::Response& res) {
+    void HttpServer::handle_computer_status(const httplib::Request&, httplib::Response& res) {
         auto result = api_.get_computer_status();
         if (!result.ok()) { send_error(res, 503, result.status, result.message); return; }
         send_ok(res, screen_info_to_json(result.value));
     }
 
-    void HttpServer::handle_computer_screenshot(const httplib::Request& req,
-        httplib::Response& res) {
+    void HttpServer::handle_computer_screenshot(const httplib::Request& req, httplib::Response& res) {
         bool analyze = true; std::string prompt;
         if (!req.body.empty()) {
-            try {
-                auto body = json::parse(req.body);
-                analyze   = body.value("analyze", true);
-                prompt    = body.value("prompt", "");
-            } catch (...) {}
+            try { auto body = json::parse(req.body); analyze = body.value("analyze", true); prompt = body.value("prompt", ""); }
+            catch (...) {}
         }
         auto result = api_.take_screenshot(analyze, prompt);
         if (!result.ok()) { send_error(res, 503, result.status, result.message); return; }
         send_ok(res, screenshot_to_json(result.value));
     }
 
-    void HttpServer::handle_computer_click(const httplib::Request& req,
-        httplib::Response& res) {
+    void HttpServer::handle_computer_click(const httplib::Request& req, httplib::Response& res) {
         json body;
         try { body = json::parse(req.body); }
-        catch (...) {
-            send_error(res, 400, CardinalStatus::INVALID_REQUEST, "Invalid JSON"); return;
-        }
-        auto result = api_.computer_click(body.value("x", -1),
-                                           body.value("y", -1),
+        catch (...) { send_error(res, 400, CardinalStatus::INVALID_REQUEST, "Invalid JSON"); return; }
+        auto result = api_.computer_click(body.value("x", -1), body.value("y", -1),
                                            body.value("description", std::string("")));
         if (!result.ok()) { send_error(res, 503, result.status, result.message); return; }
         json resp; resp["result"] = result.value;
         send_ok(res, resp.dump());
     }
 
-    void HttpServer::handle_computer_type(const httplib::Request& req,
-        httplib::Response& res) {
+    void HttpServer::handle_computer_type(const httplib::Request& req, httplib::Response& res) {
         json body;
         try { body = json::parse(req.body); }
-        catch (...) {
-            send_error(res, 400, CardinalStatus::INVALID_REQUEST, "Invalid JSON"); return;
-        }
+        catch (...) { send_error(res, 400, CardinalStatus::INVALID_REQUEST, "Invalid JSON"); return; }
         auto result = api_.computer_type(body.value("text", std::string("")),
                                           body.value("key",  std::string("")));
         if (!result.ok()) { send_error(res, 503, result.status, result.message); return; }
@@ -795,41 +751,105 @@ namespace cardinal {
         send_ok(res, resp.dump());
     }
 
-    void HttpServer::handle_computer_shell(const httplib::Request& req,
-        httplib::Response& res) {
+    void HttpServer::handle_computer_shell(const httplib::Request& req, httplib::Response& res) {
         json body;
         try { body = json::parse(req.body); }
-        catch (...) {
-            send_error(res, 400, CardinalStatus::INVALID_REQUEST, "Invalid JSON"); return;
-        }
+        catch (...) { send_error(res, 400, CardinalStatus::INVALID_REQUEST, "Invalid JSON"); return; }
         std::string command = body.value("command", "");
-        if (command.empty()) {
-            send_error(res, 400, CardinalStatus::INVALID_REQUEST, "Missing command"); return;
-        }
+        if (command.empty()) { send_error(res, 400, CardinalStatus::INVALID_REQUEST, "Missing command"); return; }
         auto result = api_.computer_shell(command, body.value("timeout_seconds", 0));
         if (!result.ok()) { send_error(res, 503, result.status, result.message); return; }
         send_ok(res, shell_result_to_json(result.value));
     }
 
     // =========================================================================
+    // v1.6.0 — Voice handlers
+    // =========================================================================
+
+    void HttpServer::handle_voice_status(const httplib::Request&, httplib::Response& res) {
+        send_ok(res, voice_status_to_json(api_.get_voice_status()));
+    }
+
+    void HttpServer::handle_voice_enable(const httplib::Request& req, httplib::Response& res) {
+        std::string input_mode;
+        if (!req.body.empty()) {
+            try { input_mode = json::parse(req.body).value("input_mode", std::string("")); }
+            catch (...) {}
+        }
+        auto result = api_.enable_voice(input_mode);
+        if (!result.ok()) { send_error(res, 500, result.status, result.error_message); return; }
+        json resp;
+        resp["ok"]     = true;
+        resp["status"] = json::parse(voice_status_to_json(api_.get_voice_status()));
+        send_ok(res, resp.dump());
+    }
+
+    void HttpServer::handle_voice_disable(const httplib::Request&, httplib::Response& res) {
+        auto result = api_.disable_voice();
+        if (!result.ok()) { send_error(res, 500, result.status, result.error_message); return; }
+        json resp; resp["ok"] = true; resp["active"] = false;
+        send_ok(res, resp.dump());
+    }
+
+    void HttpServer::handle_voice_speak(const httplib::Request& req, httplib::Response& res) {
+        std::string text;
+        try { text = json::parse(req.body).value("text", std::string("")); }
+        catch (...) { send_error(res, 400, CardinalStatus::INVALID_INPUT, "Invalid JSON body"); return; }
+        if (text.empty()) { send_error(res, 400, CardinalStatus::INVALID_INPUT, "Missing 'text' field"); return; }
+
+        auto result = api_.voice_speak(text);
+        if (!result.ok()) { send_error(res, 500, result.status, result.error_message); return; }
+        json resp;
+        resp["ok"]          = true;
+        resp["duration_ms"] = result.value.duration_ms;
+        resp["sample_rate"] = result.value.sample_rate;
+        resp["samples"]     = static_cast<int>(result.value.samples.size());
+        send_ok(res, resp.dump());
+    }
+
+    void HttpServer::handle_voice_transcribe(const httplib::Request& req, httplib::Response& res) {
+        if (req.body.empty()) { send_error(res, 400, CardinalStatus::INVALID_INPUT, "Empty audio body"); return; }
+
+        int sample_rate = 16000;
+        if (req.has_header("X-Sample-Rate")) {
+            try { sample_rate = std::stoi(req.get_header_value("X-Sample-Rate")); } catch (...) {}
+        }
+
+        AudioChunk audio;
+        audio.sample_rate = sample_rate;
+        audio.channels    = 1;
+        size_t n_samples  = req.body.size() / sizeof(int16_t);
+        audio.samples.resize(n_samples);
+        std::memcpy(audio.samples.data(), req.body.data(), n_samples * sizeof(int16_t));
+
+        auto result = api_.voice_transcribe(audio);
+        if (!result.ok()) { send_error(res, 500, result.status, result.error_message); return; }
+
+        json resp;
+        resp["ok"]          = true;
+        resp["text"]        = result.value.text;
+        resp["success"]     = result.value.success;
+        resp["confidence"]  = result.value.confidence;
+        resp["duration_ms"] = result.value.duration_ms;
+        send_ok(res, resp.dump());
+    }
+
+    // =========================================================================
     // JSON response helpers
     // =========================================================================
 
-    void HttpServer::send_ok(httplib::Response& res,
-        const std::string& json_body) {
+    void HttpServer::send_ok(httplib::Response& res, const std::string& json_body) {
         res.status = 200;
         res.set_content(json_body, "application/json");
     }
 
-    void HttpServer::send_error(httplib::Response& res,
-        int http_code, CardinalStatus status,
-        const std::string& message) {
+    void HttpServer::send_error(httplib::Response& res, int http_code,
+        CardinalStatus status, const std::string& message) {
         res.status = http_code;
         res.set_content(error_json(status, message), "application/json");
     }
 
-    std::string HttpServer::error_json(CardinalStatus status,
-        const std::string& message) {
+    std::string HttpServer::error_json(CardinalStatus status, const std::string& message) {
         json j;
         j["error"]  = message;
         j["status"] = static_cast<int>(status);
@@ -842,7 +862,7 @@ namespace cardinal {
     }
 
     // =========================================================================
-    // JSON serialization helpers — existing (v1.4.0)
+    // JSON serializers — v1.4.0
     // =========================================================================
 
     std::string HttpServer::feeling_to_json(const FeelingInfo& f) {
@@ -955,18 +975,18 @@ namespace cardinal {
 
     std::string HttpServer::settings_to_json(const CardinalSettings& s) {
         json j;
-        j["retriever_mode"]         = s.retriever_mode;
-        j["keyword_weight"]         = s.keyword_weight;
-        j["semantic_weight"]        = s.semantic_weight;
-        j["max_retrieval_results"]  = s.max_retrieval_results;
-        j["min_retrieval_score"]    = s.min_retrieval_score;
-        j["verifier_mode"]          = s.verifier_mode;
-        j["min_rule_confidence"]    = s.min_rule_confidence;
-        j["contradiction_threshold"]= s.contradiction_threshold;
-        j["temperature"]            = s.temperature;
-        j["top_p"]                  = s.top_p;
-        j["stream_responses"]       = s.stream_responses;
-        j["log_level"]              = s.log_level;
+        j["retriever_mode"]          = s.retriever_mode;
+        j["keyword_weight"]          = s.keyword_weight;
+        j["semantic_weight"]         = s.semantic_weight;
+        j["max_retrieval_results"]   = s.max_retrieval_results;
+        j["min_retrieval_score"]     = s.min_retrieval_score;
+        j["verifier_mode"]           = s.verifier_mode;
+        j["min_rule_confidence"]     = s.min_rule_confidence;
+        j["contradiction_threshold"] = s.contradiction_threshold;
+        j["temperature"]             = s.temperature;
+        j["top_p"]                   = s.top_p;
+        j["stream_responses"]        = s.stream_responses;
+        j["log_level"]               = s.log_level;
         return j.dump(2);
     }
 
@@ -985,8 +1005,7 @@ namespace cardinal {
         return j.dump();
     }
 
-    std::string HttpServer::self_improvement_status_to_json(
-        const SelfImprovementStatus& s) {
+    std::string HttpServer::self_improvement_status_to_json(const SelfImprovementStatus& s) {
         json j;
         j["self_model_enabled"]    = s.self_model_enabled;
         j["weakest_domain"]        = s.weakest_domain;
@@ -1029,7 +1048,7 @@ namespace cardinal {
     }
 
     // =========================================================================
-    // JSON serialization helpers — v1.5.0
+    // JSON serializers — v1.5.0
     // =========================================================================
 
     std::string HttpServer::scheduler_status_to_json(const SchedulerStatus& s) {
@@ -1168,8 +1187,7 @@ namespace cardinal {
         j["confidence"]           = r.confidence;
         j["error_message"]        = r.error_message;
         j["clarification_needed"] = r.clarification_needed;
-        if (r.success)
-            j["task"] = json::parse(scheduled_task_to_json(r.task));
+        if (r.success) j["task"] = json::parse(scheduled_task_to_json(r.task));
         return j.dump();
     }
 
@@ -1202,6 +1220,24 @@ namespace cardinal {
         j["stderr"]      = r.stderr_text;
         j["duration_ms"] = r.duration_ms;
         j["command"]     = r.command;
+        return j.dump();
+    }
+
+    // =========================================================================
+    // JSON serializers — v1.6.0
+    // =========================================================================
+
+    std::string HttpServer::voice_status_to_json(const VoiceStatus& s) {
+        json j;
+        j["active"]          = s.active;
+        j["input_mode"]      = s.input_mode;
+        j["current_state"]   = s.current_state;
+        j["stt_ready"]       = s.stt_ready;
+        j["tts_ready"]       = s.tts_ready;
+        j["wake_word_ready"] = s.wake_word_ready;
+        j["session_id"]      = s.session_id;
+        j["transcriptions"]  = s.transcriptions;
+        j["utterances"]      = s.utterances;
         return j.dump();
     }
 

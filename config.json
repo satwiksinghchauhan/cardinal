@@ -5,7 +5,7 @@
       "model_path": "models/Qwen_Qwen3.5-4B-Q4_K_M.gguf",
       "chat_template": "qwen3",
       "context_length": 8192,
-      "gpu_layers": 18,
+      "gpu_layers": 33,
       "threads": 8
     },
     "tensorrt": {
@@ -299,6 +299,52 @@
     "atspi": {
       "enabled": true,
       "fallback_to_vision": true
+    }
+  },
+  "voice": {
+    "enabled": false,
+    "input_mode": "vad",
+    "tts_streaming": "sentence",
+    "session_id": "voice_session",
+    "stt": {
+      "model_path": "models/voice/ggml-medium.en.bin",
+      "language": "en",
+      "gpu_layers": 8,
+      "threads": 4,
+      "beam_size": 5,
+      "initial_prompt": ""
+    },
+    "tts": {
+      "model_path": "models/voice/en_US-lessac-medium.onnx",
+      "config_path": "models/voice/en_US-lessac-medium.onnx.json",
+      "speaker_id": 0,
+      "length_scale": 1.0,
+      "noise_scale": 0.667,
+      "noise_w": 0.8,
+      "sample_rate": 22050
+    },
+    "vad": {
+      "energy_threshold": 0.02,
+      "pre_speech_ms": 300,
+      "post_speech_ms": 800,
+      "min_speech_ms": 200,
+      "max_speech_ms": 30000
+    },
+    "push_to_talk": {
+      "key": "space"
+    },
+    "wake_word": {
+      "phrase": "hey cardinal",
+      "acoustic_model": "models/voice/pocketsphinx/en-us",
+      "dictionary": "models/voice/pocketsphinx/cmudict-en-us.dict",
+      "sensitivity": 1e-20
+    },
+    "audio": {
+      "input_device": -1,
+      "output_device": -1,
+      "sample_rate": 16000,
+      "channels": 1,
+      "frames_per_buffer": 512
     }
   }
 }

@@ -1,19 +1,16 @@
 // =============================================================================
-// Cardinal - Tool Registry Implementation (v1.5.0)
+// Cardinal - Tool Registry Implementation (v1.6.0)
 // File: src/tools/tool_registry.cpp
 //
-// Changes from v1.4.0:
-//   - Added computer use tool includes
-//   - init() calls register_builtin_computer_tools() when computer_use.enabled
-//   - init() calls register_builtin_schedule_task() when scheduler.enabled
-//   - register_builtin_computer_tools() added
-//   - register_builtin_schedule_task() added
+// Changes from v1.5.0:
+//   - register_builtin_voice_tools() added
+//   - init() calls it when voice.enabled
 // =============================================================================
 
 #include "tools/tool_registry.h"
 #include "utils/logger.h"
 
-// v1.5.0 — computer use tool headers
+// v1.5.0 — computer use
 #include "tools/builtin/computer/tool_screenshot.h"
 #include "tools/builtin/computer/tool_click.h"
 #include "tools/builtin/computer/tool_type_text.h"
@@ -26,6 +23,9 @@
 #include "tools/builtin/computer/tool_email.h"
 #include "tools/builtin/computer/tool_watch_screen.h"
 #include "tools/builtin/computer/tool_schedule_task.h"
+
+// v1.6.0 — voice
+#include "tools/builtin/voice/tool_voice_control.h"
 
 #include <nlohmann/json.hpp>
 #include <sstream>
@@ -55,14 +55,14 @@ namespace cardinal {
         if (tc.file_write.enabled)          register_builtin_file_write();
         if (tc.knowledge_graph.enabled)     register_builtin_kg_query();
         if (tc.episodic_search.enabled)     register_builtin_episodic_search();
-        // Vision tool — only register if model is configured
         if (!config_.vision.model_path.empty()) register_builtin_analyze_image();
 
-        // v1.5.0 — computer use tools (requires computer_use.enabled in config)
+        // v1.5.0
         if (config_.computer_use.enabled)   register_builtin_computer_tools();
-
-        // v1.5.0 — scheduler tool (works headless, no display needed)
         if (config_.scheduler.enabled)      register_builtin_schedule_task();
+
+        // v1.6.0
+        if (config_.voice.enabled)          register_builtin_voice_tools();
 
         LOG_INFO("ToolRegistry: " + std::to_string(tools_.size()) +
                  " tools registered");
@@ -143,22 +143,15 @@ namespace cardinal {
             json param;
             param["type"]        = tool_param_type_to_string(p.type);
             param["description"] = p.description;
-            if (!p.enum_values.empty()) {
-                param["enum"] = p.enum_values;
-            }
-            if (!p.default_val.empty()) {
-                param["default"] = p.default_val;
-            }
+            if (!p.enum_values.empty()) param["enum"]    = p.enum_values;
+            if (!p.default_val.empty()) param["default"] = p.default_val;
             props[p.name] = param;
             if (p.required) required_arr.push_back(p.name);
         }
 
         params["properties"] = props;
-        if (!required_arr.empty()) {
-            params["required"] = required_arr;
-        }
+        if (!required_arr.empty()) params["required"] = required_arr;
         tool["parameters"] = params;
-
         return tool.dump(2);
     }
 
@@ -199,7 +192,6 @@ namespace cardinal {
         if (!def_opt) return "Tool not found: " + call.tool_name;
         if (!def_opt->enabled) return "Tool disabled: " + call.tool_name;
 
-        // Check required parameters
         for (const auto& param : def_opt->parameters) {
             if (param.required &&
                 call.arguments.find(param.name) == call.arguments.end()) {
@@ -207,12 +199,11 @@ namespace cardinal {
                        "' for tool '" + call.tool_name + "'";
             }
         }
-
-        return ""; // valid
+        return "";
     }
 
     // =========================================================================
-    // Built-in tool registration
+    // Built-in tool registration — original set
     // =========================================================================
 
     void ToolRegistry::register_builtin_web_search() {
@@ -220,9 +211,7 @@ namespace cardinal {
         def.name        = "web_search";
         def.description = "Search the web using DuckDuckGo. Returns a list of "
                           "relevant results with titles, URLs, and snippets.";
-        def.confirmation_required =
-            config_.tools.web_search.confirmation_required;
-
+        def.confirmation_required = config_.tools.web_search.confirmation_required;
         def.parameters.push_back({
             "query", ToolParameterType::STRING,
             "The search query string", true, ""
@@ -230,10 +219,8 @@ namespace cardinal {
         def.parameters.push_back({
             "max_results", ToolParameterType::NUMBER,
             "Maximum number of results to return (default: 5)",
-            false,
-            std::to_string(config_.tools.web_search.max_results)
+            false, std::to_string(config_.tools.web_search.max_results)
         });
-
         register_tool(def);
     }
 
@@ -242,9 +229,7 @@ namespace cardinal {
         def.name        = "web_fetch";
         def.description = "Fetch the content of a URL and return it as plain text. "
                           "HTML is stripped, only readable content is returned.";
-        def.confirmation_required =
-            config_.tools.web_fetch.confirmation_required;
-
+        def.confirmation_required = config_.tools.web_fetch.confirmation_required;
         def.parameters.push_back({
             "url", ToolParameterType::STRING,
             "The full URL to fetch (must start with http:// or https://)",
@@ -253,10 +238,8 @@ namespace cardinal {
         def.parameters.push_back({
             "max_kb", ToolParameterType::NUMBER,
             "Maximum content size in KB to return",
-            false,
-            std::to_string(config_.tools.web_fetch.max_content_kb)
+            false, std::to_string(config_.tools.web_fetch.max_content_kb)
         });
-
         register_tool(def);
     }
 
@@ -266,16 +249,13 @@ namespace cardinal {
         def.description = "Evaluate a mathematical expression and return the result. "
                           "Supports arithmetic, trigonometry, logarithms, and "
                           "common mathematical functions.";
-        def.confirmation_required =
-            config_.tools.calculator.confirmation_required;
-
+        def.confirmation_required = config_.tools.calculator.confirmation_required;
         def.parameters.push_back({
             "expression", ToolParameterType::STRING,
             "The mathematical expression to evaluate. "
             "Examples: '2 + 2', 'sqrt(144)', 'sin(pi/2)', '(3^4) / 2'",
             true, ""
         });
-
         register_tool(def);
     }
 
@@ -285,9 +265,7 @@ namespace cardinal {
         def.description = "Execute Python code in a sandboxed environment and "
                           "return stdout output. Network access is disabled. "
                           "Use for data analysis, calculations, and scripting.";
-        def.confirmation_required =
-            config_.tools.run_python.confirmation_required;
-
+        def.confirmation_required = config_.tools.run_python.confirmation_required;
         def.parameters.push_back({
             "code", ToolParameterType::STRING,
             "The Python code to execute. Print results to stdout.",
@@ -296,10 +274,8 @@ namespace cardinal {
         def.parameters.push_back({
             "timeout_seconds", ToolParameterType::NUMBER,
             "Execution timeout in seconds",
-            false,
-            std::to_string(config_.tools.run_python.timeout_seconds)
+            false, std::to_string(config_.tools.run_python.timeout_seconds)
         });
-
         register_tool(def);
     }
 
@@ -308,9 +284,7 @@ namespace cardinal {
         def.name        = "file_read";
         def.description = "Read the contents of a file from the allowed paths. "
                           "Returns the file content as text.";
-        def.confirmation_required =
-            config_.tools.file_read.confirmation_required;
-
+        def.confirmation_required = config_.tools.file_read.confirmation_required;
         def.parameters.push_back({
             "path", ToolParameterType::STRING,
             "The file path to read. Must be within allowed paths.",
@@ -321,7 +295,6 @@ namespace cardinal {
             "Maximum content size in KB to return (default: 512)",
             false, "512"
         });
-
         register_tool(def);
     }
 
@@ -330,9 +303,7 @@ namespace cardinal {
         def.name        = "file_write";
         def.description = "Write content to a file in the allowed output paths. "
                           "Creates the file if it doesn't exist, overwrites if it does.";
-        def.confirmation_required =
-            config_.tools.file_write.confirmation_required;
-
+        def.confirmation_required = config_.tools.file_write.confirmation_required;
         def.parameters.push_back({
             "path", ToolParameterType::STRING,
             "The file path to write. Must be within allowed output paths.",
@@ -348,7 +319,6 @@ namespace cardinal {
             "If true, append to existing file instead of overwriting.",
             false, "false"
         });
-
         register_tool(def);
     }
 
@@ -357,9 +327,7 @@ namespace cardinal {
         def.name        = "knowledge_graph_query";
         def.description = "Query Cardinal's internal knowledge graph for facts, "
                           "entities, and relationships in a specific domain.";
-        def.confirmation_required =
-            config_.tools.knowledge_graph.confirmation_required;
-
+        def.confirmation_required = config_.tools.knowledge_graph.confirmation_required;
         def.parameters.push_back({
             "query", ToolParameterType::STRING,
             "The query string to search the knowledge graph",
@@ -375,7 +343,6 @@ namespace cardinal {
             "Maximum number of results",
             false, "10"
         });
-
         register_tool(def);
     }
 
@@ -384,9 +351,7 @@ namespace cardinal {
         def.name        = "episodic_search";
         def.description = "Search Cardinal's episodic memory for past interactions "
                           "and learned knowledge relevant to a query.";
-        def.confirmation_required =
-            config_.tools.episodic_search.confirmation_required;
-
+        def.confirmation_required = config_.tools.episodic_search.confirmation_required;
         def.parameters.push_back({
             "query", ToolParameterType::STRING,
             "The query to search past episodes for",
@@ -395,15 +360,13 @@ namespace cardinal {
         def.parameters.push_back({
             "max_results", ToolParameterType::NUMBER,
             "Maximum number of episodes to return",
-            false,
-            std::to_string(config_.tools.episodic_search.max_results)
+            false, std::to_string(config_.tools.episodic_search.max_results)
         });
         def.parameters.push_back({
             "min_confidence", ToolParameterType::NUMBER,
             "Minimum confidence score filter (0.0-1.0)",
             false, "0.0"
         });
-
         register_tool(def);
     }
 
@@ -414,25 +377,21 @@ namespace cardinal {
                           "Accepts a local file path or a URL. "
                           "Optionally accepts a specific question or prompt about the image.";
         def.confirmation_required = config_.vision.confirmation_required;
-
         def.parameters.push_back({
             "image", ToolParameterType::STRING,
-            "The image to analyze. Can be a local file path (e.g. ~/Pictures/photo.jpg) "
-            "or a URL (e.g. https://example.com/image.png)",
+            "The image to analyze. Can be a local file path or a URL.",
             true, "", {}
         });
         def.parameters.push_back({
             "prompt", ToolParameterType::STRING,
-            "Optional specific question or instruction about the image. "
-            "Default: comprehensive description of all visible content.",
+            "Optional specific question or instruction about the image.",
             false, "", {}
         });
-
         register_tool(def);
     }
 
     // =========================================================================
-    // v1.5.0 — Computer use tool registration
+    // v1.5.0 — Computer use + scheduler
     // =========================================================================
 
     void ToolRegistry::register_builtin_computer_tools() {
@@ -444,33 +403,33 @@ namespace cardinal {
         register_tool(make_open_app_tool_def(config_));
         register_tool(make_close_app_tool_def(config_));
 
-        // Browser only if venv is configured
         if (!config_.computer_use.browser.venv_path.empty())
             register_tool(make_browser_tool_def(config_));
-
-        // Shell only if enabled
         if (config_.computer_use.shell.enabled)
             register_tool(make_shell_run_tool_def(config_));
 
         register_tool(make_file_ops_tool_def(config_));
         register_tool(make_system_control_tool_def(config_));
 
-        // Email only if enabled
         if (config_.computer_use.email.enabled)
             register_tool(make_email_tool_def(config_));
 
         register_tool(make_watch_screen_tool_def(config_));
-
         LOG_INFO("ToolRegistry: computer use tools registered");
     }
-
-    // =========================================================================
-    // v1.5.0 — Scheduler tool registration
-    // =========================================================================
 
     void ToolRegistry::register_builtin_schedule_task() {
         register_tool(make_schedule_task_tool_def(config_));
         LOG_DEBUG("ToolRegistry: registered tool 'schedule_task'");
+    }
+
+    // =========================================================================
+    // v1.6.0 — Voice tools
+    // =========================================================================
+
+    void ToolRegistry::register_builtin_voice_tools() {
+        register_tool(make_voice_control_tool_definition());
+        LOG_INFO("ToolRegistry: registered builtin voice tools (voice_control)");
     }
 
 } // namespace cardinal

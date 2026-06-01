@@ -1,6 +1,14 @@
 // =============================================================================
-// Cardinal - Main Entry Point (v1.5.0)
+// Cardinal - Main Entry Point (v1.6.0)
 // File: src/main.cpp
+//
+// Changes from v1.5.0:
+//   - int main() → int main(int argc, char* argv[])
+//   - --voice [mode] flag parsed
+//   - Voice subsystem started after api.init() when flag is set
+//   - /voice on/off/status/speak commands added
+//   - Banner updated with voice commands
+//   - Version bumped to 1.6.0
 // =============================================================================
 
 #include "api/cardinal_api.h"
@@ -23,38 +31,45 @@ static void signal_handler(int) { g_shutdown_requested.store(true); }
 // =============================================================================
 
 static void print_banner(bool http_enabled,
-                          const std::string& host, int port)
+                          const std::string& host, int port,
+                          bool voice_mode)
 {
     std::cout << "\n";
     std::cout << "  +===========================================+\n";
-    std::cout << "  |         C A R D I N A L  v1.5.0           |\n";
+    std::cout << "  |         C A R D I N A L  v1.6.0           |\n";
     std::cout << "  |    Neurosymbolic AGI Architecture         |\n";
     std::cout << "  +===========================================+\n";
     std::cout << "\n";
     if (http_enabled)
         std::cout << "  HTTP API: http://" << host << ":" << port << "\n"
                   << "  TypeScript bridge: ready\n";
+    if (voice_mode)
+        std::cout << "  Voice mode: active\n";
     std::cout << "\n";
     std::cout << "  Commands:\n";
-    std::cout << "    /exit           -- quit\n";
-    std::cout << "    /reset          -- clear conversation history\n";
-    std::cout << "    /rules          -- show active rule store\n";
-    std::cout << "    /stats          -- show memory and verifier stats\n";
-    std::cout << "    /export         -- export training data to JSONL\n";
-    std::cout << "    /scan           -- run full contradiction scan\n";
-    std::cout << "    /http start     -- start HTTP server\n";
-    std::cout << "    /http stop      -- stop HTTP server\n";
-    std::cout << "    /self_model     -- show self-improvement status\n";
-    std::cout << "    /reflect        -- trigger meta-cognition (Layer 2)\n";
-    std::cout << "    /train [domain] -- trigger LoRA fine-tuning (Layer 3)\n";
-    std::cout << "    /scheduler      -- show scheduler status\n";
-    std::cout << "    /tasks          -- list scheduled tasks\n";
-    std::cout << "    /computer       -- show computer use status\n";
+    std::cout << "    /exit              -- quit\n";
+    std::cout << "    /reset             -- clear conversation history\n";
+    std::cout << "    /rules             -- show active rule store\n";
+    std::cout << "    /stats             -- show memory and verifier stats\n";
+    std::cout << "    /export            -- export training data to JSONL\n";
+    std::cout << "    /scan              -- run full contradiction scan\n";
+    std::cout << "    /http start        -- start HTTP server\n";
+    std::cout << "    /http stop         -- stop HTTP server\n";
+    std::cout << "    /self_model        -- show self-improvement status\n";
+    std::cout << "    /reflect           -- trigger meta-cognition (Layer 2)\n";
+    std::cout << "    /train [domain]    -- trigger LoRA fine-tuning (Layer 3)\n";
+    std::cout << "    /scheduler         -- show scheduler status\n";
+    std::cout << "    /tasks             -- list scheduled tasks\n";
+    std::cout << "    /computer          -- show computer use status\n";
+    std::cout << "    /voice on [mode]   -- enable voice (ptt/vad/wake)\n";
+    std::cout << "    /voice off         -- disable voice\n";
+    std::cout << "    /voice status      -- show voice subsystem status\n";
+    std::cout << "    /voice speak <txt> -- test TTS directly\n";
     std::cout << "\n";
 }
 
 // =============================================================================
-// Command helpers
+// Command helpers (unchanged from v1.5.0)
 // =============================================================================
 
 static void print_stats(cardinal::CardinalAPI& api) {
@@ -208,7 +223,7 @@ static void handle_reflect(cardinal::CardinalAPI& api) {
         std::cout << "\n  Findings:\n";
         for (const auto& f : r.findings) {
             std::cout << "  [" << f.domain << "] " << f.pattern << "\n";
-            std::cout << "    → " << f.recommendation << "\n";
+            std::cout << "    -> " << f.recommendation << "\n";
         }
     }
     std::cout << "\n";
@@ -240,16 +255,42 @@ static void handle_train(cardinal::CardinalAPI& api,
 // main
 // =============================================================================
 
-int main() {
+int main(int argc, char* argv[]) {
     std::signal(SIGINT,  signal_handler);
     std::signal(SIGTERM, signal_handler);
+
+    // =========================================================================
+    // Parse arguments
+    // =========================================================================
+    bool        voice_mode          = false;
+    std::string voice_mode_override;   // "ptt", "vad", or "wake_word"
+
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+
+        if (arg == "--voice") {
+            voice_mode = true;
+        } else if (arg == "--voice=ptt"  || arg == "--voice=push_to_talk") {
+            voice_mode          = true;
+            voice_mode_override = "ptt";
+        } else if (arg == "--voice=vad") {
+            voice_mode          = true;
+            voice_mode_override = "vad";
+        } else if (arg == "--voice=wake" || arg == "--voice=wake_word") {
+            voice_mode          = true;
+            voice_mode_override = "wake_word";
+        } else if (arg == "--help" || arg == "-h") {
+            std::cout << "Usage: cardinal [--voice[=ptt|vad|wake]]\n";
+            return 0;
+        }
+    }
 
     try {
         // =====================================================================
         // 1. Initialize
         // =====================================================================
         cardinal::Logger::instance().init("logs/cardinal.log");
-        LOG_INFO("Cardinal v1.5.0 starting...");
+        LOG_INFO("Cardinal v1.6.0 starting...");
 
         cardinal::CardinalAPI api;
         auto init_result = api.init("config.json");
@@ -260,7 +301,26 @@ int main() {
         }
 
         // =====================================================================
-        // 2. HTTP server setup
+        // 2. Voice subsystem (--voice flag)
+        // =====================================================================
+        if (voice_mode) {
+            LOG_INFO("--voice flag: enabling voice subsystem");
+            auto vr = api.enable_voice(voice_mode_override);
+            if (!vr.ok()) {
+                std::cerr << "\n  [WARNING] Voice failed to start: "
+                          << vr.error_message << "\n";
+                std::cerr << "  Continuing in text-only mode.\n\n";
+                voice_mode = false;
+            } else {
+                std::cout << "  Voice mode active";
+                if (!voice_mode_override.empty())
+                    std::cout << " (" << voice_mode_override << ")";
+                std::cout << "\n";
+            }
+        }
+
+        // =====================================================================
+        // 3. HTTP server setup
         // =====================================================================
         auto config = cardinal::ConfigLoader::load("config.json");
         cardinal::HttpServer http_server(api, config);
@@ -296,9 +356,10 @@ int main() {
         if (config.api.http_enabled) start_http();
 
         // =====================================================================
-        // 3. Interactive loop
+        // 4. Interactive loop
         // =====================================================================
-        print_banner(config.api.http_enabled, config.api.host, config.api.port);
+        print_banner(config.api.http_enabled, config.api.host, config.api.port,
+                     voice_mode);
 
         const std::string session_id = "default";
         std::cout << "  Cardinal is ready. Type your message.\n\n";
@@ -371,7 +432,6 @@ int main() {
                 if (user_input.size() > 7)
                     domain_hint = user_input.substr(7);
                 handle_train(api, domain_hint);
-                // Mark session boundary so any pending adapter gets applied
                 api.on_session_boundary();
                 continue;
             }
@@ -382,20 +442,20 @@ int main() {
                 if (!result.ok()) {
                     std::cout << "  [scheduler error: " << result.error_message << "]\n\n";
                 } else {
-                    const auto& s = result.value;
+                    const auto& sc = result.value;
                     std::cout << "\n  -- Scheduler --\n";
-                    std::cout << "  Running:  " << (s.running ? "yes" : "no") << "\n";
-                    std::cout << "  Tasks:    " << s.total_tasks
-                              << " (" << s.enabled_tasks << " enabled)\n";
-                    std::cout << "  Runs:     " << s.total_runs
-                              << " | ok=" << s.successful_runs
-                              << " | fail=" << s.failed_runs << "\n";
-                    if (!s.current_task_name.empty())
-                        std::cout << "  Active:   " << s.current_task_name << "\n";
-                    if (!s.last_run_at.empty())
-                        std::cout << "  Last run: " << s.last_run_at << "\n";
-                    if (!s.next_scheduled_at.empty())
-                        std::cout << "  Next:     " << s.next_scheduled_at << "\n";
+                    std::cout << "  Running:  " << (sc.running ? "yes" : "no") << "\n";
+                    std::cout << "  Tasks:    " << sc.total_tasks
+                              << " (" << sc.enabled_tasks << " enabled)\n";
+                    std::cout << "  Runs:     " << sc.total_runs
+                              << " | ok=" << sc.successful_runs
+                              << " | fail=" << sc.failed_runs << "\n";
+                    if (!sc.current_task_name.empty())
+                        std::cout << "  Active:   " << sc.current_task_name << "\n";
+                    if (!sc.last_run_at.empty())
+                        std::cout << "  Last run: " << sc.last_run_at << "\n";
+                    if (!sc.next_scheduled_at.empty())
+                        std::cout << "  Next:     " << sc.next_scheduled_at << "\n";
                     std::cout << "\n";
                 }
                 continue;
@@ -425,11 +485,74 @@ int main() {
                 if (!result.ok()) {
                     std::cout << "  [computer error: " << result.message << "]\n\n";
                 } else {
-                    const auto& s = result.value;
+                    const auto& cs = result.value;
                     std::cout << "\n  -- Computer Use --\n";
-                    std::cout << "  Display: " << s.display_var << "\n";
-                    std::cout << "  Server:  " << display_server_to_string(s.server) << "\n";
-                    std::cout << "  Size:    " << s.width << "x" << s.height << "\n\n";
+                    std::cout << "  Display: " << cs.display_var << "\n";
+                    std::cout << "  Server:  " << display_server_to_string(cs.server) << "\n";
+                    std::cout << "  Size:    " << cs.width << "x" << cs.height << "\n\n";
+                }
+                continue;
+            }
+
+            // v1.6.0 commands — voice
+            if (user_input == "/voice status") {
+                auto vs = api.get_voice_status();
+                std::cout << "\n  -- Voice Subsystem --\n";
+                std::cout << "  Active:      " << (vs.active ? "yes" : "no") << "\n";
+                if (vs.active) {
+                    std::cout << "  Mode:        " << vs.input_mode    << "\n";
+                    std::cout << "  State:       " << vs.current_state << "\n";
+                    std::cout << "  STT ready:   " << (vs.stt_ready       ? "yes" : "no") << "\n";
+                    std::cout << "  TTS ready:   " << (vs.tts_ready       ? "yes" : "no") << "\n";
+                    std::cout << "  Wake ready:  " << (vs.wake_word_ready  ? "yes" : "no") << "\n";
+                    std::cout << "  Transcripts: " << vs.transcriptions << "\n";
+                    std::cout << "  Utterances:  " << vs.utterances     << "\n";
+                }
+                std::cout << "\n";
+                continue;
+            }
+
+            if (user_input == "/voice off") {
+                auto r = api.disable_voice();
+                if (!r.ok())
+                    std::cout << "  [voice error: " << r.error_message << "]\n\n";
+                else
+                    std::cout << "  Voice subsystem disabled.\n\n";
+                continue;
+            }
+
+            if (user_input.substr(0, 9) == "/voice on") {
+                std::string mode_hint;
+                if (user_input.size() > 10) {
+                    mode_hint = user_input.substr(10);
+                    // trim leading spaces
+                    auto lt = mode_hint.find_first_not_of(" \t");
+                    if (lt != std::string::npos) mode_hint = mode_hint.substr(lt);
+                }
+                auto r = api.enable_voice(mode_hint);
+                if (!r.ok()) {
+                    std::cout << "  [voice error: " << r.error_message << "]\n\n";
+                } else {
+                    std::cout << "  Voice subsystem enabled";
+                    if (!mode_hint.empty()) std::cout << " (" << mode_hint << ")";
+                    std::cout << ".\n\n";
+                }
+                continue;
+            }
+
+            if (user_input.size() >= 13 &&
+                user_input.substr(0, 12) == "/voice speak")
+            {
+                std::string text;
+                if (user_input.size() > 13) text = user_input.substr(13);
+                if (text.empty()) {
+                    std::cout << "  Usage: /voice speak <text>\n\n";
+                } else {
+                    auto r = api.voice_speak(text);
+                    if (!r.ok())
+                        std::cout << "  [voice error: " << r.error_message << "]\n\n";
+                    else
+                        std::cout << "  Spoken (" << r.value.duration_ms << "ms synthesis).\n\n";
                 }
                 continue;
             }
@@ -474,9 +597,13 @@ int main() {
         }
 
         // =====================================================================
-        // 4. Clean shutdown — apply any pending adapter before exit
+        // 5. Clean shutdown
         // =====================================================================
         api.on_session_boundary();
+
+        if (api.is_voice_active())
+            api.disable_voice();
+
         if (http_running) stop_http();
         api.shutdown();
         LOG_INFO("Cardinal shutdown complete");

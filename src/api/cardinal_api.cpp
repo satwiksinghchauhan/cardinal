@@ -1,14 +1,12 @@
 // =============================================================================
-// Cardinal - API Facade Implementation (v1.5.0)
+// Cardinal - API Facade Implementation (v1.6.0)
 // File: src/api/cardinal_api.cpp
 //
-// Changes from v1.4.0:
-//   - SchedulerEngine owned and started in init()
-//   - All computer use controllers owned and initialised in init()
-//   - shutdown() stops scheduler + browser controller
-//   - run_post_inference() notifies scheduler idle tracker
-//   - All scheduler API methods added
-//   - All computer use API methods added
+// Changes from v1.5.0:
+//   - VoiceLoop included and initialised in init() if voice.enabled
+//   - shutdown() stops VoiceLoop
+//   - enable_voice / disable_voice / is_voice_active / get_voice_status
+//     / voice_speak / voice_transcribe / check_voice added
 // =============================================================================
 
 #include "api/cardinal_api.h"
@@ -36,10 +34,8 @@
 #include "explainability/explainability_exporter.h"
 #include "training/self_improvement_loop.h"
 
-// v1.5.0 — Scheduler
+// v1.5.0
 #include "scheduler/scheduler_engine.h"
-
-// v1.5.0 — Computer Use
 #include "computer/display_detector.h"
 #include "computer/screen_reader.h"
 #include "computer/input_controller.h"
@@ -50,6 +46,9 @@
 #include "computer/system_controller.h"
 #include "computer/email_controller.h"
 #include "computer/atspi_reader.h"
+
+// v1.6.0
+#include "voice/voice_loop.h"
 
 #include <sstream>
 #include <iomanip>
@@ -79,7 +78,7 @@ namespace cardinal {
                 "CardinalAPI::init() called twice");
 
         try {
-            LOG_INFO("CardinalAPI v1.5.0 initializing from: " + config_path);
+            LOG_INFO("CardinalAPI v1.6.0 initializing from: " + config_path);
             start_time_ = std::chrono::steady_clock::now();
 
             // Config
@@ -176,7 +175,7 @@ namespace cardinal {
             sessions_ = std::make_unique<SessionManager>();
             sessions_->create();
 
-            // Self-Improvement (v1.4.0) — Layers 1, 2, 3
+            // Self-Improvement (v1.4.0)
             if (config_->self_improvement.enabled) {
                 self_improvement_ = std::make_unique<SelfImprovementLoop>(
                     *config_, *storage_, *rule_store_, *backend_);
@@ -233,7 +232,6 @@ namespace cardinal {
                     std::string(display_server_to_string(
                         display_detector_->server())) + ")");
 
-                // Wire computer use controllers into tool_executor
                 tool_executor_->set_screen_reader(screen_reader_.get());
                 tool_executor_->set_input_controller(input_controller_.get());
                 tool_executor_->set_app_controller(app_controller_.get());
@@ -244,9 +242,18 @@ namespace cardinal {
                 tool_executor_->set_email_controller(email_controller_.get());
             }
 
-            // Wire scheduler into tool_executor (works headless too)
+            // Wire scheduler into tool_executor
             if (scheduler_)
                 tool_executor_->set_scheduler(scheduler_.get());
+
+            // ---- Voice (v1.6.0) ----
+            if (config_->voice.enabled) {
+                auto vr = enable_voice();
+                if (!vr.ok()) {
+                    LOG_WARN("Voice subsystem failed to start: " + vr.error_message +
+                                " — continuing without voice");
+                }
+            }
 
             initialized_.store(true);
 
@@ -280,7 +287,13 @@ namespace cardinal {
         try {
             LOG_INFO("CardinalAPI shutting down...");
 
-            // v1.5.0 — stop scheduler and browser first
+            // v1.6.0 — voice first (has its own audio thread)
+            if (voice_loop_) {
+                voice_loop_->stop();
+                voice_loop_.reset();
+            }
+
+            // v1.5.0 — stop scheduler and browser
             if (scheduler_) {
                 scheduler_->stop();
                 scheduler_.reset();
@@ -289,11 +302,11 @@ namespace cardinal {
                 browser_controller_->stop();
             }
 
-            if (checker_)          checker_->run_maintenance();
-            if (rule_store_)       rule_store_->save();
-            if (sessions_)         sessions_->destroy_all();
-            if (storage_)          storage_->close();
-            if (audit_log_)        audit_log_->close();
+            if (checker_)    checker_->run_maintenance();
+            if (rule_store_) rule_store_->save();
+            if (sessions_)   sessions_->destroy_all();
+            if (storage_)    storage_->close();
+            if (audit_log_)  audit_log_->close();
 
             initialized_.store(false);
             shutting_down_.store(false);
@@ -309,7 +322,7 @@ namespace cardinal {
     }
 
     // =========================================================================
-    // Session management (unchanged)
+    // Session management
     // =========================================================================
 
     CardinalResult<std::string>
@@ -652,7 +665,7 @@ namespace cardinal {
             stats.verifier.total_maintenance_runs = checker_->total_maintenance_runs();
 
             stats.uptime_seconds = uptime_string();
-            stats.version        = "1.5.0";
+            stats.version        = "1.6.0";
             stats.initialized    = true;
             return CardinalResult<SystemStats>::success(stats);
         }
@@ -883,7 +896,6 @@ namespace cardinal {
             storage_->set_extracted_rule_id(ep_id, cr.committed_rule_id);
         if (rule_store_->is_dirty()) rule_store_->save();
 
-        // v1.4.0 — notify self-improvement loop (Layers 1 + 2)
         if (self_improvement_) {
             self_improvement_->on_inference(
                 resp.feeling.reasoning_domain,
@@ -894,7 +906,6 @@ namespace cardinal {
                 cr.rule_committed);
         }
 
-        // v1.5.0 — notify scheduler idle tracker
         if (scheduler_) scheduler_->on_inference();
 
         ChatResponse chat_resp;
@@ -1254,6 +1265,106 @@ namespace cardinal {
             return CardinalResult<ShellResult>::error(
                 CardinalStatus::COMPUTER_USE_ERROR, e.what());
         }
+    }
+
+    // =========================================================================
+    // Voice API (v1.6.0)
+    // =========================================================================
+
+    CardinalVoidResult CardinalAPI::check_voice() const {
+        auto init_check = check_initialized();
+        if (!init_check.ok()) return init_check;
+        if (!voice_loop_ || !voice_loop_->is_running())
+            return CardinalVoidResult::error(CardinalStatus::VOICE_ERROR,
+                                              "Voice subsystem is not active");
+        return CardinalVoidResult::success();
+    }
+
+    CardinalVoidResult CardinalAPI::enable_voice(const std::string& input_mode_override) {
+        auto init_check = check_initialized();
+        if (!init_check.ok()) return init_check;
+
+        std::lock_guard<std::mutex> lock(voice_mutex_);
+
+        if (voice_loop_ && voice_loop_->is_running())
+            return CardinalVoidResult::success();   // already active
+
+        VoiceConfig vc = config_->voice;
+        if (!input_mode_override.empty())
+            vc.input_mode = voice_input_mode_from_string(input_mode_override);
+
+        // Provide a thin chat_stream lambda so VoiceLoop doesn't depend on CardinalAPI
+        VoiceChatStreamFn chat_fn =
+            [this](const std::string& session_id,
+                   const std::string& message,
+                   std::function<bool(const std::string&, bool)> cb) -> bool
+        {
+            ApiStreamCallback api_cb = [&cb](const StreamToken& token) -> bool {
+                return cb(token.token, token.is_final);
+            };
+            auto result = chat_stream(session_id, message, api_cb);
+            return result.ok();
+        };
+
+        voice_loop_ = std::make_unique<VoiceLoop>(vc, std::move(chat_fn));
+
+        if (!voice_loop_->start()) {
+            voice_loop_.reset();
+            return CardinalVoidResult::error(CardinalStatus::VOICE_ERROR,
+                                              "VoiceLoop failed to start");
+        }
+
+        LOG_INFO("Voice subsystem enabled (mode=" +
+                 voice_input_mode_to_string(vc.input_mode) + ")");
+        return CardinalVoidResult::success();
+    }
+
+    CardinalVoidResult CardinalAPI::disable_voice() {
+        std::lock_guard<std::mutex> lock(voice_mutex_);
+        if (!voice_loop_) return CardinalVoidResult::success();
+        voice_loop_->stop();
+        voice_loop_.reset();
+        LOG_INFO("Voice subsystem disabled");
+        return CardinalVoidResult::success();
+    }
+
+    bool CardinalAPI::is_voice_active() const {
+        std::lock_guard<std::mutex> lock(voice_mutex_);
+        return voice_loop_ && voice_loop_->is_running();
+    }
+
+    VoiceStatus CardinalAPI::get_voice_status() const {
+        std::lock_guard<std::mutex> lock(voice_mutex_);
+        if (!voice_loop_) { VoiceStatus vs; vs.active = false; return vs; }
+        return voice_loop_->get_status();
+    }
+
+    CardinalResult<TTSResult> CardinalAPI::voice_speak(const std::string& text) {
+        {
+            std::lock_guard<std::mutex> lock(voice_mutex_);
+            auto vc = check_voice();
+            if (!vc.ok())
+                return CardinalResult<TTSResult>::error(vc.status, vc.error_message);
+        }
+        TTSResult tts = voice_loop_->speak(text);
+        if (!tts.success)
+            return CardinalResult<TTSResult>::error(CardinalStatus::VOICE_ERROR,
+                                                     tts.error_message);
+        return CardinalResult<TTSResult>::success(std::move(tts));
+    }
+
+    CardinalResult<TranscriptResult> CardinalAPI::voice_transcribe(const AudioChunk& audio) {
+        {
+            std::lock_guard<std::mutex> lock(voice_mutex_);
+            auto vc = check_voice();
+            if (!vc.ok())
+                return CardinalResult<TranscriptResult>::error(vc.status, vc.error_message);
+        }
+        TranscriptResult tr = voice_loop_->transcribe(audio);
+        if (!tr.success)
+            return CardinalResult<TranscriptResult>::error(CardinalStatus::VOICE_ERROR,
+                                                            tr.error_message);
+        return CardinalResult<TranscriptResult>::success(std::move(tr));
     }
 
 } // namespace cardinal

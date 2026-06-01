@@ -1,14 +1,12 @@
 # =============================================================================
-# Cardinal - Root CMakeLists.txt (v1.5.0)
+# Cardinal - Root CMakeLists.txt (v1.6.0)
 # Neurosymbolic AGI Architecture
-# =============================================================================
-# Offline-first: uses vendored repos when present, falls back to FetchContent.
 # =============================================================================
 
 cmake_minimum_required(VERSION 3.28)
 
 project(Cardinal
-    VERSION 1.5.0
+    VERSION 1.6.0
     DESCRIPTION "Neurosymbolic AGI Architecture"
     LANGUAGES CXX CUDA
 )
@@ -30,12 +28,23 @@ endif()
 # User options
 # -----------------------------------------------------------------------------
 option(CARDINAL_ENABLE_TENSORRT
-    "Build TensorRT-LLM backend"
-    OFF)
+    "Build TensorRT-LLM backend" OFF)
+
+option(CARDINAL_ENABLE_VOICE
+    "Build voice subsystem (whisper.cpp + piper + portaudio + pocketsphinx)" ON)
+
+# Piper install prefix — flat layout (libs + espeak-ng-data are in this dir directly)
+set(PIPER_INSTALL_DIR "${CMAKE_SOURCE_DIR}/vendor/piper/install"
+    CACHE PATH "Path to pre-built piper install prefix")
+
+# PocketSphinx install prefix — pre-built separately
+set(POCKETSPHINX_INSTALL_DIR "${CMAKE_SOURCE_DIR}/vendor/pocketsphinx/install"
+    CACHE PATH "Path to pre-built pocketsphinx install prefix")
 
 message(STATUS "Build type:         ${CMAKE_BUILD_TYPE}")
 message(STATUS "CUDA architectures: ${CMAKE_CUDA_ARCHITECTURES}")
 message(STATUS "TensorRT backend:   ${CARDINAL_ENABLE_TENSORRT}")
+message(STATUS "Voice subsystem:    ${CARDINAL_ENABLE_VOICE}")
 message(STATUS "Version:            ${PROJECT_VERSION}")
 
 # -----------------------------------------------------------------------------
@@ -71,32 +80,145 @@ macro(fetch_if_missing name repo tag)
     else()
         message(STATUS "Using vendored ${name} (vendor/${name})")
         if(EXISTS "${CMAKE_SOURCE_DIR}/vendor/${name}/CMakeLists.txt")
-            add_subdirectory("${CMAKE_SOURCE_DIR}/vendor/${name}" "${CMAKE_CURRENT_BINARY_DIR}/vendor-${name}")
-        else()
-            message(STATUS "Vendored ${name} exists but no CMakeLists.txt -- include paths must be set manually")
+            add_subdirectory("${CMAKE_SOURCE_DIR}/vendor/${name}"
+                             "${CMAKE_CURRENT_BINARY_DIR}/vendor-${name}")
         endif()
     endif()
 endmacro()
 
 fetch_if_missing(nlohmann_json
-    https://github.com/nlohmann/json.git
-    v3.11.3)
+    https://github.com/nlohmann/json.git v3.11.3)
 
 fetch_if_missing(cpp-httplib
-    https://github.com/yhirose/cpp-httplib.git
-    v0.18.3)
+    https://github.com/yhirose/cpp-httplib.git v0.18.3)
 
-fetch_if_missing(muparser
-    https://github.com/beltoforion/muparser.git
-    v2.3.4)
 set(ENABLE_SAMPLES OFF CACHE BOOL "" FORCE)
 set(ENABLE_OPENMP  OFF CACHE BOOL "" FORCE)
+fetch_if_missing(muparser
+    https://github.com/beltoforion/muparser.git v2.3.4)
 
 if(CARDINAL_ENABLE_TENSORRT)
     fetch_if_missing(tokenizers_cpp
-        https://github.com/mlc-ai/tokenizers-cpp.git
-        main)
+        https://github.com/mlc-ai/tokenizers-cpp.git main)
     set(TOKENIZERS_CPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+endif()
+
+# -----------------------------------------------------------------------------
+# Voice vendor deps (v1.6.0)
+# -----------------------------------------------------------------------------
+if(CARDINAL_ENABLE_VOICE)
+
+    # -------------------------------------------------------------------------
+    # whisper.cpp — USE PRE-BUILT LIBRARY (NO REBUILD)
+    # -------------------------------------------------------------------------
+    set(WHISPER_ROOT ${CMAKE_SOURCE_DIR}/vendor/whisper.cpp)
+    if(NOT EXISTS "${WHISPER_ROOT}")
+        message(FATAL_ERROR
+            "whisper.cpp not found at ${WHISPER_ROOT}\n"
+            "Run: cd vendor && git clone https://github.com/ggerganov/whisper.cpp.git")
+    endif()
+    
+    set(WHISPER_BUILD_DIR "${WHISPER_ROOT}/build")
+    set(WHISPER_LIB_DIR "${WHISPER_BUILD_DIR}/src")
+    
+    if(NOT EXISTS "${WHISPER_LIB_DIR}/libwhisper.so")
+        message(FATAL_ERROR
+            "Pre-built whisper.cpp not found at ${WHISPER_LIB_DIR}/libwhisper.so\n"
+            "Build it first:\n"
+            "  cd ${WHISPER_ROOT}\n"
+            "  mkdir -p build && cd build\n"
+            "  cmake .. -DGGML_CUDA=ON -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=OFF\n"
+            "  make -j$(nproc)")
+    endif()
+
+    add_library(whisper SHARED IMPORTED)
+    set_target_properties(whisper PROPERTIES
+        IMPORTED_LOCATION "${WHISPER_LIB_DIR}/libwhisper.so"
+        INTERFACE_INCLUDE_DIRECTORIES "${WHISPER_ROOT}"
+    )
+
+    # -------------------------------------------------------------------------
+    # piper — pre-built
+    # -------------------------------------------------------------------------
+    set(PIPER_ROOT ${CMAKE_SOURCE_DIR}/vendor/piper)
+    if(NOT EXISTS "${PIPER_ROOT}")
+        message(FATAL_ERROR
+            "piper not found at ${PIPER_ROOT}\n"
+            "Run: cd vendor && git clone https://github.com/rhasspy/piper.git")
+    endif()
+
+    set(PIPER_SRC_CPP "${PIPER_ROOT}/src/cpp")
+
+    if(NOT EXISTS "${PIPER_INSTALL_DIR}")
+        message(FATAL_ERROR
+            "Piper install not found at ${PIPER_INSTALL_DIR}\n"
+            "Pre-build piper:\n"
+            "  cd ${PIPER_ROOT}\n"
+            "  cmake -B build -DCMAKE_INSTALL_PREFIX=install -DCMAKE_BUILD_TYPE=Release\n"
+            "  cmake --build build --target install -j\$(nproc)")
+    endif()
+
+    find_library(PIPER_PHONEMIZE_LIB
+        NAMES piper_phonemize
+        PATHS "${PIPER_INSTALL_DIR}" NO_DEFAULT_PATH REQUIRED)
+    find_library(ESPEAK_NG_LIB
+        NAMES espeak-ng espeak
+        PATHS "${PIPER_INSTALL_DIR}" NO_DEFAULT_PATH REQUIRED)
+    find_library(ONNXRUNTIME_LIB
+        NAMES onnxruntime
+        PATHS "${PIPER_INSTALL_DIR}" NO_DEFAULT_PATH REQUIRED)
+
+    find_library(FMT_LIB    NAMES fmt    PATHS "${PIPER_INSTALL_DIR}" NO_DEFAULT_PATH)
+    find_library(SPDLOG_LIB NAMES spdlog PATHS "${PIPER_INSTALL_DIR}" NO_DEFAULT_PATH)
+
+    # Paths for piper-phonemize headers (from build directory)
+    set(PIPER_PHONEMIZE_BUILD_INCLUDE "${CMAKE_SOURCE_DIR}/vendor/piper/build/pi/include")
+
+    message(STATUS "Piper install dir:      ${PIPER_INSTALL_DIR}")
+    message(STATUS "piper_phonemize lib:    ${PIPER_PHONEMIZE_LIB}")
+    message(STATUS "onnxruntime lib:        ${ONNXRUNTIME_LIB}")
+    message(STATUS "espeak-ng lib:          ${ESPEAK_NG_LIB}")
+
+    # -------------------------------------------------------------------------
+    # portaudio
+    # -------------------------------------------------------------------------
+    set(PORTAUDIO_ROOT ${CMAKE_SOURCE_DIR}/vendor/portaudio)
+    if(NOT EXISTS "${PORTAUDIO_ROOT}")
+        message(FATAL_ERROR
+            "portaudio not found at ${PORTAUDIO_ROOT}\n"
+            "Run: cd vendor && git clone https://github.com/PortAudio/portaudio.git")
+    endif()
+    message(STATUS "Using vendored portaudio (${PORTAUDIO_ROOT})")
+    set(PA_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
+    set(PA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    add_subdirectory("${PORTAUDIO_ROOT}" "${CMAKE_CURRENT_BINARY_DIR}/vendor-portaudio")
+
+    # -------------------------------------------------------------------------
+    # pocketsphinx — pre-built
+    # -------------------------------------------------------------------------
+    set(POCKETSPHINX_ROOT ${CMAKE_SOURCE_DIR}/vendor/pocketsphinx)
+    if(NOT EXISTS "${POCKETSPHINX_ROOT}")
+        message(FATAL_ERROR
+            "pocketsphinx not found at ${POCKETSPHINX_ROOT}\n"
+            "Run: cd vendor && git clone https://github.com/cmusphinx/pocketsphinx.git")
+    endif()
+
+    if(NOT EXISTS "${POCKETSPHINX_INSTALL_DIR}")
+        message(FATAL_ERROR
+            "PocketSphinx install not found at ${POCKETSPHINX_INSTALL_DIR}\n"
+            "Pre-build pocketsphinx:\n"
+            "  cd ${POCKETSPHINX_ROOT}\n"
+            "  cmake -B build -DCMAKE_INSTALL_PREFIX=install -DCMAKE_BUILD_TYPE=Release\n"
+            "  cmake --build build --target install -j\$(nproc)")
+    endif()
+
+    find_library(POCKETSPHINX_LIB
+        NAMES pocketsphinx
+        PATHS "${POCKETSPHINX_INSTALL_DIR}/lib" NO_DEFAULT_PATH REQUIRED)
+
+    message(STATUS "PocketSphinx install:   ${POCKETSPHINX_INSTALL_DIR}")
+    message(STATUS "PocketSphinx lib:       ${POCKETSPHINX_LIB}")
+
 endif()
 
 # -----------------------------------------------------------------------------
@@ -107,20 +229,18 @@ message(STATUS "OpenSSL: ${OPENSSL_VERSION}")
 add_compile_definitions(CPPHTTPLIB_OPENSSL_SUPPORT)
 
 find_package(PkgConfig QUIET)
-if(PkgConfig_FOUND)
-    pkg_check_modules(SQLITE3 REQUIRED sqlite3)
-    message(STATUS "SQLite3: ${SQLITE3_VERSION}")
-    set(SQLITE3_SYSTEM ON)
-else()
-    find_library(SQLITE3_LIB NAMES sqlite3 REQUIRED)
-    find_path(SQLITE3_INCLUDE NAMES sqlite3.h REQUIRED)
-    set(SQLITE3_MANUAL ON)
+find_package(Threads REQUIRED)
+find_package(SQLite3 REQUIRED)
+
+if(CARDINAL_ENABLE_VOICE)
+    find_package(ALSA REQUIRED)
+    message(STATUS "ALSA: ${ALSA_VERSION_STRING}")
 endif()
 
-# llama.cpp (vendored, always present)
+# llama.cpp (vendored)
 set(LLAMA_ROOT  ${CMAKE_SOURCE_DIR}/vendor/llama.cpp)
 if(NOT EXISTS "${LLAMA_ROOT}")
-    message(FATAL_ERROR "llama.cpp not found at ${LLAMA_ROOT} - please run 'git submodule update --init' or copy it there")
+    message(FATAL_ERROR "llama.cpp not found at ${LLAMA_ROOT}")
 endif()
 
 set(LLAMA_BUILD ${LLAMA_ROOT}/build)
@@ -128,9 +248,10 @@ set(LLAMA_INCLUDE_DIRS
     ${LLAMA_ROOT}/include
     ${LLAMA_ROOT}/ggml/include
     ${LLAMA_ROOT}/common)
-set(LLAMA_SEARCH ${LLAMA_BUILD}/bin ${LLAMA_BUILD}/lib
-                  ${LLAMA_BUILD}/src ${LLAMA_BUILD}/common
-                  ${LLAMA_BUILD}/ggml/src ${LLAMA_BUILD}/ggml/src/ggml-cuda)
+set(LLAMA_SEARCH
+    ${LLAMA_BUILD}/bin ${LLAMA_BUILD}/lib
+    ${LLAMA_BUILD}/src ${LLAMA_BUILD}/common
+    ${LLAMA_BUILD}/ggml/src ${LLAMA_BUILD}/ggml/src/ggml-cuda)
 
 find_library(LLAMA_LIB        NAMES llama     PATHS ${LLAMA_SEARCH} NO_DEFAULT_PATH REQUIRED)
 find_library(GGML_LIB         NAMES ggml      PATHS ${LLAMA_SEARCH} NO_DEFAULT_PATH REQUIRED)
@@ -141,11 +262,9 @@ find_library(LLAVA_LIB        NAMES llava     PATHS ${LLAMA_SEARCH} NO_DEFAULT_P
 
 if(EXISTS "${LLAMA_ROOT}/tools/mtmd/mtmd.h")
     set(CARDINAL_MTMD_AVAILABLE ON)
-    message(STATUS "mtmd: found at ${LLAMA_ROOT}/tools/mtmd — vision will be enabled")
     find_library(MTMD_LIB NAMES mtmd PATHS ${LLAMA_SEARCH} NO_DEFAULT_PATH)
 else()
     set(CARDINAL_MTMD_AVAILABLE OFF)
-    message(STATUS "mtmd: NOT found — vision disabled")
 endif()
 
 set(LLAMA_LIBRARIES ${LLAMA_LIB} ${GGML_LIB})
@@ -171,10 +290,8 @@ else()
               /usr/include/swipl REQUIRED)
     find_library(SWIPL_LIB NAMES swipl
         PATHS /usr/lib/swi-prolog/lib/x86_64-linux
-              /usr/lib/x86_64-linux-gnu
-              /usr/local/lib REQUIRED)
+              /usr/lib/x86_64-linux-gnu /usr/local/lib REQUIRED)
 endif()
-message(STATUS "SWI-Prolog: ${SWIPL_INCLUDE_DIR}")
 add_compile_definitions(CARDINAL_PROLOG_ENABLED)
 
 if(CARDINAL_ENABLE_TENSORRT)
@@ -193,18 +310,7 @@ if(CARDINAL_ENABLE_TENSORRT)
         PATHS /usr/lib/x86_64-linux-gnu /usr/local/lib REQUIRED)
     find_library(CUDNN_LIB NAMES cudnn
         PATHS /usr/lib/x86_64-linux-gnu /usr/local/cuda/lib64 REQUIRED)
-    message(STATUS "TRT-LLM: ${TENSORRT_LLM_LIB}")
 endif()
-
-# -----------------------------------------------------------------------------
-# Threads (v1.5.0 addition)
-# -----------------------------------------------------------------------------
-find_package(Threads REQUIRED)
-
-# -----------------------------------------------------------------------------
-# SQLite3 (v1.5.0 - ensure find_package works)
-# -----------------------------------------------------------------------------
-find_package(SQLite3 REQUIRED)
 
 # -----------------------------------------------------------------------------
 # Source files
@@ -222,8 +328,7 @@ set(CARDINAL_CORE_SOURCES
     src/core/backends/llama_cpp_backend.cpp
 )
 if(CARDINAL_ENABLE_TENSORRT)
-    list(APPEND CARDINAL_CORE_SOURCES
-        src/core/backends/tensorrt_backend.cpp)
+    list(APPEND CARDINAL_CORE_SOURCES src/core/backends/tensorrt_backend.cpp)
 endif()
 
 set(CARDINAL_MEMORY_SOURCES
@@ -268,7 +373,6 @@ set(CARDINAL_LEARNING_SOURCES
     src/learning/training_exporter.cpp
 )
 
-# v1.5.0 — Self-Improvement (Layers 1-3)
 set(CARDINAL_SELF_MODEL_SOURCES
     src/self_model/self_model.cpp
     src/self_model/meta_cognition.cpp
@@ -291,7 +395,6 @@ set(CARDINAL_API_SOURCES
     src/api/http_server.cpp
 )
 
-# v1.5.0 — New subsystems
 set(CARDINAL_SCHEDULER_SOURCES
     src/scheduler/scheduler_store.cpp
     src/scheduler/scheduler_parser.cpp
@@ -332,6 +435,21 @@ set(CARDINAL_COMPUTER_TOOLS_SOURCES
     src/tools/builtin/computer/tool_schedule_task.cpp
 )
 
+set(CARDINAL_VOICE_SOURCES
+    src/voice/audio_device.cpp
+    src/voice/vad_detector.cpp
+    src/voice/stt_engine.cpp
+    src/voice/tts_engine.cpp
+    src/voice/wake_word_detector.cpp
+    src/voice/voice_loop.cpp
+    src/tools/builtin/voice/tool_voice_control.cpp
+)
+
+if(CARDINAL_ENABLE_VOICE)
+    list(APPEND CARDINAL_VOICE_SOURCES
+        "${CMAKE_SOURCE_DIR}/vendor/piper/src/cpp/piper.cpp")
+endif()
+
 set(CARDINAL_ALL_SOURCES
     ${CARDINAL_UTILS_SOURCES}
     ${CARDINAL_CORE_SOURCES}
@@ -352,6 +470,10 @@ set(CARDINAL_ALL_SOURCES
     src/main.cpp
 )
 
+if(CARDINAL_ENABLE_VOICE)
+    list(APPEND CARDINAL_ALL_SOURCES ${CARDINAL_VOICE_SOURCES})
+endif()
+
 # -----------------------------------------------------------------------------
 # Cardinal executable
 # -----------------------------------------------------------------------------
@@ -362,17 +484,10 @@ target_include_directories(cardinal PRIVATE
     ${LLAMA_INCLUDE_DIRS}
     ${CUDAToolkit_INCLUDE_DIRS}
     ${SWIPL_INCLUDE_DIR}
-    # v1.5.0 - new subsystem headers
     src/scheduler
     src/computer
     src/watch
 )
-
-if(DEFINED SQLITE3_SYSTEM AND SQLITE3_SYSTEM)
-    target_include_directories(cardinal PRIVATE ${SQLITE3_INCLUDE_DIRS})
-elseif(DEFINED SQLITE3_MANUAL AND SQLITE3_MANUAL)
-    target_include_directories(cardinal PRIVATE ${SQLITE3_INCLUDE})
-endif()
 
 if(CARDINAL_ENABLE_TENSORRT)
     target_include_directories(cardinal PRIVATE ${TENSORRT_LLM_INCLUDE})
@@ -385,6 +500,34 @@ if(CARDINAL_MTMD_AVAILABLE)
     if(MTMD_LIB)
         list(APPEND LLAMA_LIBRARIES ${MTMD_LIB})
     endif()
+endif()
+
+# v1.6.0 — voice include dirs (FIXED)
+# v1.6.0 — voice include dirs (FIXED)
+# v1.6.0 — voice include dirs (FIXED)
+# v1.6.0 — voice include dirs (FIXED)
+if(CARDINAL_ENABLE_VOICE)
+    target_include_directories(cardinal PRIVATE
+        # whisper
+        "${CMAKE_SOURCE_DIR}/vendor/whisper.cpp/include"
+        "${CMAKE_SOURCE_DIR}/vendor/whisper.cpp"
+        # piper core
+        "${PIPER_SRC_CPP}"
+        # piper-phonemize headers (from build directory)
+        "${PIPER_PHONEMIZE_BUILD_INCLUDE}"
+        # espeak-ng headers
+        "${PIPER_INSTALL_DIR}/include"
+        # spdlog headers (from piper build)
+        "${CMAKE_SOURCE_DIR}/vendor/piper/build/si/include"
+        # pocketsphinx
+        "${POCKETSPHINX_INSTALL_DIR}/include"
+        # ONNX Runtime
+        "${CMAKE_SOURCE_DIR}/vendor/onnxruntime/include"
+    )
+    target_compile_definitions(cardinal PRIVATE
+        CARDINAL_VOICE_ENABLED
+        PIPER_ESPEAK_DATA_PATH="${PIPER_INSTALL_DIR}/espeak-ng-data"
+    )
 endif()
 
 target_compile_definitions(cardinal PRIVATE
@@ -408,23 +551,39 @@ target_link_libraries(cardinal PRIVATE
     OpenSSL::SSL
     OpenSSL::Crypto
     ${SWIPL_LIB}
-    pthread
-    dl
-    # v1.5.0 - additional libraries
     SQLite::SQLite3
     Threads::Threads
+    pthread
+    dl
 )
-
-if(DEFINED SQLITE3_SYSTEM AND SQLITE3_SYSTEM)
-    target_link_libraries(cardinal PRIVATE ${SQLITE3_LIBRARIES})
-elseif(DEFINED SQLITE3_MANUAL AND SQLITE3_MANUAL)
-    target_link_libraries(cardinal PRIVATE ${SQLITE3_LIB})
-endif()
 
 if(CARDINAL_ENABLE_TENSORRT)
     target_link_libraries(cardinal PRIVATE
         ${TENSORRT_LLM_LIB} ${NVINFER_LIB} ${CUDNN_LIB}
         CUDA::cuda_driver)
+endif()
+
+if(CARDINAL_ENABLE_VOICE)
+    target_link_libraries(cardinal PRIVATE
+        whisper
+        portaudio
+        ${POCKETSPHINX_LIB}
+        ALSA::ALSA
+        ${PIPER_PHONEMIZE_LIB}
+        ${ONNXRUNTIME_LIB}
+        ${ESPEAK_NG_LIB}
+    )
+    if(FMT_LIB)
+        target_link_libraries(cardinal PRIVATE ${FMT_LIB})
+    endif()
+    if(SPDLOG_LIB)
+        target_link_libraries(cardinal PRIVATE ${SPDLOG_LIB})
+    endif()
+
+    set_target_properties(cardinal PROPERTIES
+        BUILD_RPATH   "${PIPER_INSTALL_DIR};${POCKETSPHINX_INSTALL_DIR}/lib"
+        INSTALL_RPATH "${PIPER_INSTALL_DIR};${POCKETSPHINX_INSTALL_DIR}/lib"
+    )
 endif()
 
 set(CARDINAL_RPATH "${LLAMA_BUILD}/lib;${LLAMA_BUILD}/bin")
@@ -436,31 +595,15 @@ set_target_properties(cardinal PROPERTIES
     INSTALL_RPATH "${CARDINAL_RPATH}")
 
 # -----------------------------------------------------------------------------
-# Browser venv setup target (v1.5.0 - optional helper)
-# -----------------------------------------------------------------------------
-add_custom_target(setup_browser_venv
-    COMMAND python3 -m venv "${CMAKE_SOURCE_DIR}/cardinal-browser-venv"
-    COMMAND "${CMAKE_SOURCE_DIR}/cardinal-browser-venv/bin/pip"
-            install playwright --quiet
-    COMMAND "${CMAKE_SOURCE_DIR}/cardinal-browser-venv/bin/playwright"
-            install chromium
-    COMMENT "Setting up cardinal-browser-venv with Playwright..."
-    VERBATIM
-)
-
-# -----------------------------------------------------------------------------
-# Data directory creation (v1.5.0 - add new directories)
+# Data / model directory creation
 # -----------------------------------------------------------------------------
 add_custom_command(TARGET cardinal POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory
-            "${CMAKE_SOURCE_DIR}/data/scheduler"
-    COMMAND ${CMAKE_COMMAND} -E make_directory
-            "${CMAKE_SOURCE_DIR}/data/screenshots"
-    COMMAND ${CMAKE_COMMAND} -E make_directory
-            "${CMAKE_SOURCE_DIR}/data/browser_profile"
-    COMMAND ${CMAKE_COMMAND} -E make_directory
-            "${CMAKE_SOURCE_DIR}/data/browser_helper"
-    COMMENT "Creating v1.5.0 data directories..."
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_SOURCE_DIR}/data/scheduler"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_SOURCE_DIR}/data/screenshots"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_SOURCE_DIR}/data/browser_profile"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_SOURCE_DIR}/models/voice"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_SOURCE_DIR}/models/voice/pocketsphinx"
+    COMMENT "Creating v1.6.0 data and model directories..."
 )
 
 # -----------------------------------------------------------------------------
@@ -472,8 +615,10 @@ message(STATUS "=============================================================")
 message(STATUS "Build type:         ${CMAKE_BUILD_TYPE}")
 message(STATUS "CUDA arch:          ${CMAKE_CUDA_ARCHITECTURES}")
 message(STATUS "TensorRT backend:   ${CARDINAL_ENABLE_TENSORRT}")
-message(STATUS "Features:           tools + agent + explainability + vision")
-message(STATUS "                    + self-improvement (layers 1-3)")
-message(STATUS "                    + scheduler + computer use + watch")
+message(STATUS "Voice subsystem:    ${CARDINAL_ENABLE_VOICE}")
+if(CARDINAL_ENABLE_VOICE)
+message(STATUS "Piper install:      ${PIPER_INSTALL_DIR}")
+message(STATUS "PocketSphinx:       ${POCKETSPHINX_INSTALL_DIR}")
+endif()
 message(STATUS "Output dir:         ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
 message(STATUS "=============================================================")

@@ -1,12 +1,9 @@
 // =============================================================================
-// Cardinal - Config Loader Implementation (v1.5.0)
+// Cardinal - Config Loader Implementation (v1.6.0)
 // File: src/utils/config_loader.cpp
 //
-// Changes from v1.3.0:
-//   v1.4.0: parse_self_improvement() added; load() wired;
-//           to_json_string() extended with self_improvement block
-//   v1.5.0: parse_scheduler() + parse_computer_use() added; load() wired;
-//           to_json_string() extended with scheduler + computer_use blocks
+// Changes from v1.5.0:
+//   - parse_voice() added; load() wired; to_json_string() extended
 // =============================================================================
 
 #include "config_loader.h"
@@ -23,8 +20,7 @@ namespace cardinal {
 
     namespace {
         template<typename T>
-        T require(const json& j, const std::string& section,
-                  const std::string& key) {
+        T require(const json& j, const std::string& section, const std::string& key) {
             if (!j.contains(key))
                 throw ConfigError("Missing required field '" + key +
                                   "' in section '" + section + "'");
@@ -42,9 +38,7 @@ namespace cardinal {
             catch (...) { return def; }
         }
 
-        std::vector<std::string> opt_string_array(
-            const json& j, const std::string& key)
-        {
+        std::vector<std::string> opt_string_array(const json& j, const std::string& key) {
             std::vector<std::string> result;
             if (!j.contains(key) || !j[key].is_array()) return result;
             for (const auto& v : j[key])
@@ -90,8 +84,9 @@ namespace cardinal {
                                           j.value("explainability", json::object()));
             config.self_improvement = parse_self_improvement(
                                           j.value("self_improvement", json::object()));
-            config.scheduler        = parse_scheduler(j);       // v1.5.0
-            config.computer_use     = parse_computer_use(j);    // v1.5.0
+            config.scheduler        = parse_scheduler(j);
+            config.computer_use     = parse_computer_use(j);
+            config.voice            = parse_voice(j);              // v1.6.0
             config.benchmark        = parse_benchmark(j.at("benchmark"));
             config.logging          = parse_logging(j.at("logging"));
         }
@@ -128,8 +123,7 @@ namespace cardinal {
             if (lc.model_path.empty())
                 throw ConfigError("backend.llama_cpp.model_path cannot be empty");
             if (!std::filesystem::exists(lc.model_path))
-                throw ConfigError("backend.llama_cpp.model_path not found: " +
-                                  lc.model_path);
+                throw ConfigError("backend.llama_cpp.model_path not found: " + lc.model_path);
             if (lc.context_length < 512)
                 throw ConfigError("backend.llama_cpp.context_length must be >= 512");
             if (lc.gpu_layers < 0)
@@ -143,13 +137,11 @@ namespace cardinal {
             if (tc.engine_path.empty())
                 throw ConfigError("backend.tensorrt.engine_path cannot be empty");
             if (!std::filesystem::exists(tc.engine_path))
-                throw ConfigError("backend.tensorrt.engine_path not found: " +
-                                  tc.engine_path);
+                throw ConfigError("backend.tensorrt.engine_path not found: " + tc.engine_path);
             if (tc.tokenizer_path.empty())
                 throw ConfigError("backend.tensorrt.tokenizer_path cannot be empty");
             if (!std::filesystem::exists(tc.tokenizer_path))
-                throw ConfigError("backend.tensorrt.tokenizer_path not found: " +
-                                  tc.tokenizer_path);
+                throw ConfigError("backend.tensorrt.tokenizer_path not found: " + tc.tokenizer_path);
             if (tc.kv_cache_fraction <= 0.0f || tc.kv_cache_fraction > 1.0f)
                 throw ConfigError("backend.tensorrt.kv_cache_fraction must be in (0,1]");
         }
@@ -164,7 +156,6 @@ namespace cardinal {
         if (config.inference.max_tokens_response < 64)
             throw ConfigError("inference.max_tokens_response must be >= 64");
 
-        // Grammar path: only required for llama_cpp
         if (config.backend.type == "llama_cpp" &&
             !std::filesystem::exists(config.feeling_schema.grammar_path))
             throw ConfigError("feeling_schema.grammar_path not found: " +
@@ -177,10 +168,8 @@ namespace cardinal {
             throw ConfigError("agent.max_iterations_hard_cap must be >= max_iterations");
         if (config.agent.working_memory_size < 1)
             throw ConfigError("agent.working_memory_size must be >= 1");
-        if (config.agent.self_correction_max_attempts < 0)
-            throw ConfigError("agent.self_correction_max_attempts must be >= 0");
 
-        // Run python sandbox mode
+        // Run python
         const auto& rp = config.tools.run_python;
         if (rp.enabled) {
             if (rp.sandbox_mode != "subprocess" && rp.sandbox_mode != "docker")
@@ -188,8 +177,7 @@ namespace cardinal {
                     "tools.run_python.sandbox_mode must be 'subprocess' or 'docker'");
             if (rp.sandbox_mode == "docker" && rp.docker_image.empty())
                 throw ConfigError(
-                    "tools.run_python.docker_image cannot be empty when "
-                    "sandbox_mode is 'docker'");
+                    "tools.run_python.docker_image cannot be empty when sandbox_mode is 'docker'");
         }
 
         // API
@@ -198,7 +186,7 @@ namespace cardinal {
         if (config.api.auth_enabled && config.api.api_key.empty())
             throw ConfigError("api.api_key cannot be empty when auth_enabled=true");
 
-        // Scheduler (v1.5.0) — soft validation only, no hard errors for optional fields
+        // Scheduler
         if (config.scheduler.enabled) {
             if (config.scheduler.check_interval_seconds < 1)
                 throw ConfigError("scheduler.check_interval_seconds must be >= 1");
@@ -206,11 +194,23 @@ namespace cardinal {
                 throw ConfigError("scheduler.max_concurrent_tasks must be >= 1");
         }
 
-        // Computer use (v1.5.0) — no hard errors, all optional
+        // Computer use
         if (config.computer_use.enabled &&
             config.computer_use.safety.confirmation_timeout_seconds < 1)
             throw ConfigError(
                 "computer_use.safety.confirmation_timeout_seconds must be >= 1");
+
+        // Voice (v1.6.0) — soft validation, model files downloaded separately
+        if (config.voice.enabled) {
+            if (config.voice.stt.model_path.empty())
+                throw ConfigError("voice.stt.model_path cannot be empty when voice is enabled");
+            if (config.voice.tts.model_path.empty())
+                throw ConfigError("voice.tts.model_path cannot be empty when voice is enabled");
+            if (config.voice.audio.sample_rate < 8000)
+                throw ConfigError("voice.audio.sample_rate must be >= 8000");
+            if (config.voice.vad.energy_threshold <= 0.0f)
+                throw ConfigError("voice.vad.energy_threshold must be > 0");
+        }
 
         LOG_DEBUG("Config validation passed");
     }
@@ -312,8 +312,7 @@ namespace cardinal {
             c.file_write.allowed_paths         = opt_string_array(fw, "allowed_paths");
         }
 
-        if (j.contains("knowledge_graph_query") &&
-            j["knowledge_graph_query"].is_object()) {
+        if (j.contains("knowledge_graph_query") && j["knowledge_graph_query"].is_object()) {
             const auto& kg = j["knowledge_graph_query"];
             c.knowledge_graph.enabled               = opt<bool>(kg, "enabled", true);
             c.knowledge_graph.confirmation_required = opt<bool>(kg, "confirmation_required", false);
@@ -330,7 +329,7 @@ namespace cardinal {
     }
 
     // =========================================================================
-    // parse_vision (v1.3.0)
+    // parse_vision
     // =========================================================================
 
     VisionConfig ConfigLoader::parse_vision(const auto& j) {
@@ -408,55 +407,41 @@ namespace cardinal {
 
         if (j.contains("meta_cognition") && j["meta_cognition"].is_object()) {
             const auto& mc = j["meta_cognition"];
-            c.meta_cognition.enabled                           =
-                opt<bool>(mc, "enabled", true);
-            c.meta_cognition.trigger_every_n_inferences        =
-                opt<int>(mc, "trigger_every_n_inferences", 20);
-            c.meta_cognition.trigger_on_contradiction_rate_pct =
-                opt<float>(mc, "trigger_on_contradiction_rate_pct", 30.0f);
-            c.meta_cognition.on_demand_via_api                 =
-                opt<bool>(mc, "on_demand_via_api", true);
-            c.meta_cognition.min_failures_to_reflect           =
-                opt<int>(mc, "min_failures_to_reflect", 5);
-            c.meta_cognition.max_corrective_rules_per_session  =
-                opt<int>(mc, "max_corrective_rules_per_session", 10);
-            c.meta_cognition.corrective_rule_confidence        =
-                opt<float>(mc, "corrective_rule_confidence", 0.6f);
+            c.meta_cognition.enabled                           = opt<bool>(mc, "enabled", true);
+            c.meta_cognition.trigger_every_n_inferences        = opt<int>(mc, "trigger_every_n_inferences", 20);
+            c.meta_cognition.trigger_on_contradiction_rate_pct = opt<float>(mc, "trigger_on_contradiction_rate_pct", 30.0f);
+            c.meta_cognition.on_demand_via_api                 = opt<bool>(mc, "on_demand_via_api", true);
+            c.meta_cognition.min_failures_to_reflect           = opt<int>(mc, "min_failures_to_reflect", 5);
+            c.meta_cognition.max_corrective_rules_per_session  = opt<int>(mc, "max_corrective_rules_per_session", 10);
+            c.meta_cognition.corrective_rule_confidence        = opt<float>(mc, "corrective_rule_confidence", 0.6f);
         }
 
         if (j.contains("training") && j["training"].is_object()) {
             const auto& tr = j["training"];
-            c.training.enabled                           = opt<bool>(tr, "enabled", true);
-            c.training.lora_rank                         = opt<int>(tr, "lora_rank", 8);
-            c.training.lora_alpha                        = opt<int>(tr, "lora_alpha", 16);
-            c.training.learning_rate                     = opt<float>(tr, "learning_rate", 0.0001f);
-            c.training.epochs                            = opt<int>(tr, "epochs", 3);
-            c.training.batch_size                        = opt<int>(tr, "batch_size", 4);
-            c.training.min_episodes_for_training         = opt<int>(tr, "min_episodes_for_training", 50);
-            c.training.min_quality_confidence            = opt<float>(tr, "min_quality_confidence", 0.75f);
-            c.training.max_examples                      = opt<int>(tr, "max_examples", 0);
-            c.training.trigger_every_n_episodes          = opt<int>(tr, "trigger_every_n_episodes", 100);
-            c.training.trigger_every_n_hours             = opt<int>(tr, "trigger_every_n_hours", 24);
-            c.training.trigger_on_domain_confidence_below =
-                opt<float>(tr, "trigger_on_domain_confidence_below", 0.5f);
-            c.training.adapter_load_policy               = opt<std::string>(tr, "adapter_load_policy",
-                                                               "session_boundary");
-            c.training.eval_improvement_threshold_pct    = opt<float>(tr, "eval_improvement_threshold_pct", 5.0f);
-            c.training.eval_holdout_episodes             = opt<int>(tr, "eval_holdout_episodes", 20);
-            c.training.adapter_output_dir                = opt<std::string>(tr, "adapter_output_dir",
-                                                               "data/training/adapters");
-            c.training.dataset_output_dir                = opt<std::string>(tr, "dataset_output_dir",
-                                                               "data/training/datasets");
-            c.training.export_script_dir                 = opt<std::string>(tr, "export_script_dir",
-                                                               "data/training/scripts");
-            c.training.hf_model_path                     = opt<std::string>(tr, "hf_model_path",
-                                                               "models/qwen3.5-4b-hf");
-            c.training.python_venv                       = opt<std::string>(tr, "python_venv",
-                                                               "~/cardinal/cardinal-train-venv");
-            c.training.convert_lora_script               = opt<std::string>(tr, "convert_lora_script",
-                                                               "vendor/llama.cpp/convert_lora_to_gguf.py");
-            c.training.llama_finetune_binary             = opt<std::string>(tr, "llama_finetune_binary",
-                                                               "vendor/llama.cpp/build/bin/llama-finetune");
+            c.training.enabled                            = opt<bool>(tr, "enabled", true);
+            c.training.lora_rank                          = opt<int>(tr, "lora_rank", 8);
+            c.training.lora_alpha                         = opt<int>(tr, "lora_alpha", 16);
+            c.training.learning_rate                      = opt<float>(tr, "learning_rate", 0.0001f);
+            c.training.epochs                             = opt<int>(tr, "epochs", 3);
+            c.training.batch_size                         = opt<int>(tr, "batch_size", 4);
+            c.training.min_episodes_for_training          = opt<int>(tr, "min_episodes_for_training", 50);
+            c.training.min_quality_confidence             = opt<float>(tr, "min_quality_confidence", 0.75f);
+            c.training.max_examples                       = opt<int>(tr, "max_examples", 0);
+            c.training.trigger_every_n_episodes           = opt<int>(tr, "trigger_every_n_episodes", 100);
+            c.training.trigger_every_n_hours              = opt<int>(tr, "trigger_every_n_hours", 24);
+            c.training.trigger_on_domain_confidence_below = opt<float>(tr, "trigger_on_domain_confidence_below", 0.5f);
+            c.training.adapter_load_policy                = opt<std::string>(tr, "adapter_load_policy", "session_boundary");
+            c.training.eval_improvement_threshold_pct     = opt<float>(tr, "eval_improvement_threshold_pct", 5.0f);
+            c.training.eval_holdout_episodes              = opt<int>(tr, "eval_holdout_episodes", 20);
+            c.training.adapter_output_dir                 = opt<std::string>(tr, "adapter_output_dir", "data/training/adapters");
+            c.training.dataset_output_dir                 = opt<std::string>(tr, "dataset_output_dir", "data/training/datasets");
+            c.training.export_script_dir                  = opt<std::string>(tr, "export_script_dir", "data/training/scripts");
+            c.training.hf_model_path                      = opt<std::string>(tr, "hf_model_path", "models/qwen3.5-4b-hf");
+            c.training.python_venv                        = opt<std::string>(tr, "python_venv", "~/cardinal/cardinal-train-venv");
+            c.training.convert_lora_script                = opt<std::string>(tr, "convert_lora_script",
+                                                                "vendor/llama.cpp/convert_lora_to_gguf.py");
+            c.training.llama_finetune_binary              = opt<std::string>(tr, "llama_finetune_binary",
+                                                                "vendor/llama.cpp/build/bin/llama-finetune");
         }
 
         return c;
@@ -471,8 +456,7 @@ namespace cardinal {
         if (!j.contains("scheduler")) return c;
         const auto& s = j["scheduler"];
         c.enabled                   = opt<bool>(s, "enabled", false);
-        c.db_path                   = opt<std::string>(s, "db_path",
-                                          "data/scheduler/scheduler.db");
+        c.db_path                   = opt<std::string>(s, "db_path", "data/scheduler/scheduler.db");
         c.check_interval_seconds    = opt<int>(s, "check_interval_seconds", 30);
         c.max_concurrent_tasks      = opt<int>(s, "max_concurrent_tasks", 1);
         c.idle_threshold_minutes    = opt<int>(s, "idle_threshold_minutes", 5);
@@ -559,7 +543,85 @@ namespace cardinal {
     }
 
     // =========================================================================
-    // Unchanged parsers from v1.1.0
+    // parse_voice (v1.6.0)
+    // =========================================================================
+
+    VoiceConfig ConfigLoader::parse_voice(const auto& j) {
+        VoiceConfig vc;
+        if (!j.contains("voice")) return vc;
+        const auto& v = j["voice"];
+
+        vc.enabled    = opt<bool>(v, "enabled", false);
+        vc.session_id = opt<std::string>(v, "session_id", "voice_session");
+
+        std::string mode_str   = opt<std::string>(v, "input_mode", "vad");
+        vc.input_mode          = voice_input_mode_from_string(mode_str);
+
+        std::string stream_str = opt<std::string>(v, "tts_streaming", "sentence");
+        vc.tts_streaming       = (stream_str == "full") ? TTSStreamingMode::FULL
+                                                        : TTSStreamingMode::SENTENCE;
+
+        if (v.contains("stt") && v["stt"].is_object()) {
+            const auto& s     = v["stt"];
+            vc.stt.model_path     = opt<std::string>(s, "model_path",
+                                        "models/voice/ggml-medium.en.bin");
+            vc.stt.language       = opt<std::string>(s, "language", "en");
+            vc.stt.gpu_layers     = opt<int>(s, "gpu_layers", 8);
+            vc.stt.threads        = opt<int>(s, "threads", 4);
+            vc.stt.beam_size      = opt<int>(s, "beam_size", 5);
+            vc.stt.initial_prompt = opt<std::string>(s, "initial_prompt", "");
+        }
+
+        if (v.contains("tts") && v["tts"].is_object()) {
+            const auto& t      = v["tts"];
+            vc.tts.model_path  = opt<std::string>(t, "model_path",
+                                     "models/voice/en_US-lessac-medium.onnx");
+            vc.tts.config_path = opt<std::string>(t, "config_path",
+                                     "models/voice/en_US-lessac-medium.onnx.json");
+            vc.tts.speaker_id  = opt<int>(t, "speaker_id", 0);
+            vc.tts.length_scale= opt<float>(t, "length_scale", 1.0f);
+            vc.tts.noise_scale = opt<float>(t, "noise_scale", 0.667f);
+            vc.tts.noise_w     = opt<float>(t, "noise_w", 0.8f);
+            vc.tts.sample_rate = opt<int>(t, "sample_rate", 22050);
+        }
+
+        if (v.contains("vad") && v["vad"].is_object()) {
+            const auto& vd          = v["vad"];
+            vc.vad.energy_threshold = opt<float>(vd, "energy_threshold", 0.02f);
+            vc.vad.pre_speech_ms    = opt<int>(vd, "pre_speech_ms", 300);
+            vc.vad.post_speech_ms   = opt<int>(vd, "post_speech_ms", 800);
+            vc.vad.min_speech_ms    = opt<int>(vd, "min_speech_ms", 200);
+            vc.vad.max_speech_ms    = opt<int>(vd, "max_speech_ms", 30000);
+        }
+
+        if (v.contains("push_to_talk") && v["push_to_talk"].is_object()) {
+            vc.ptt.key = opt<std::string>(v["push_to_talk"], "key", "space");
+        }
+
+        if (v.contains("wake_word") && v["wake_word"].is_object()) {
+            const auto& ww          = v["wake_word"];
+            vc.wake_word.phrase         = opt<std::string>(ww, "phrase", "hey cardinal");
+            vc.wake_word.acoustic_model = opt<std::string>(ww, "acoustic_model",
+                                             "models/voice/pocketsphinx/en-us");
+            vc.wake_word.dictionary     = opt<std::string>(ww, "dictionary",
+                                             "models/voice/pocketsphinx/cmudict-en-us.dict");
+            vc.wake_word.sensitivity    = opt<float>(ww, "sensitivity", 1e-20f);
+        }
+
+        if (v.contains("audio") && v["audio"].is_object()) {
+            const auto& a            = v["audio"];
+            vc.audio.input_device    = opt<int>(a, "input_device", -1);
+            vc.audio.output_device   = opt<int>(a, "output_device", -1);
+            vc.audio.sample_rate     = opt<int>(a, "sample_rate", 16000);
+            vc.audio.channels        = opt<int>(a, "channels", 1);
+            vc.audio.frames_per_buffer = opt<int>(a, "frames_per_buffer", 512);
+        }
+
+        return vc;
+    }
+
+    // =========================================================================
+    // Unchanged parsers
     // =========================================================================
 
     InferenceConfig ConfigLoader::parse_inference(const auto& j) {
@@ -757,31 +819,31 @@ namespace cardinal {
 
         // Self-improvement (v1.4.0)
         const auto& si = config.self_improvement;
-        j["self_improvement"]["enabled"]                                        = si.enabled;
-        j["self_improvement"]["self_model"]["enabled"]                          = si.self_model.enabled;
-        j["self_improvement"]["self_model"]["db_path"]                          = si.self_model.db_path;
-        j["self_improvement"]["self_model"]["inject_into_prompt"]               = si.self_model.inject_into_prompt;
-        j["self_improvement"]["self_model"]["prompt_max_chars"]                 = si.self_model.prompt_max_chars;
-        j["self_improvement"]["self_model"]["history_window"]                   = si.self_model.history_window;
-        j["self_improvement"]["meta_cognition"]["enabled"]                      = si.meta_cognition.enabled;
-        j["self_improvement"]["meta_cognition"]["trigger_every_n_inferences"]   = si.meta_cognition.trigger_every_n_inferences;
-        j["self_improvement"]["meta_cognition"]["trigger_on_contradiction_rate_pct"] = si.meta_cognition.trigger_on_contradiction_rate_pct;
-        j["self_improvement"]["meta_cognition"]["on_demand_via_api"]            = si.meta_cognition.on_demand_via_api;
-        j["self_improvement"]["meta_cognition"]["min_failures_to_reflect"]      = si.meta_cognition.min_failures_to_reflect;
+        j["self_improvement"]["enabled"]                                            = si.enabled;
+        j["self_improvement"]["self_model"]["enabled"]                              = si.self_model.enabled;
+        j["self_improvement"]["self_model"]["db_path"]                              = si.self_model.db_path;
+        j["self_improvement"]["self_model"]["inject_into_prompt"]                   = si.self_model.inject_into_prompt;
+        j["self_improvement"]["self_model"]["prompt_max_chars"]                     = si.self_model.prompt_max_chars;
+        j["self_improvement"]["self_model"]["history_window"]                       = si.self_model.history_window;
+        j["self_improvement"]["meta_cognition"]["enabled"]                          = si.meta_cognition.enabled;
+        j["self_improvement"]["meta_cognition"]["trigger_every_n_inferences"]       = si.meta_cognition.trigger_every_n_inferences;
+        j["self_improvement"]["meta_cognition"]["trigger_on_contradiction_rate_pct"]= si.meta_cognition.trigger_on_contradiction_rate_pct;
+        j["self_improvement"]["meta_cognition"]["on_demand_via_api"]                = si.meta_cognition.on_demand_via_api;
+        j["self_improvement"]["meta_cognition"]["min_failures_to_reflect"]          = si.meta_cognition.min_failures_to_reflect;
         j["self_improvement"]["meta_cognition"]["max_corrective_rules_per_session"] = si.meta_cognition.max_corrective_rules_per_session;
-        j["self_improvement"]["meta_cognition"]["corrective_rule_confidence"]   = si.meta_cognition.corrective_rule_confidence;
-        j["self_improvement"]["training"]["enabled"]                            = si.training.enabled;
-        j["self_improvement"]["training"]["lora_rank"]                          = si.training.lora_rank;
-        j["self_improvement"]["training"]["lora_alpha"]                         = si.training.lora_alpha;
-        j["self_improvement"]["training"]["learning_rate"]                      = si.training.learning_rate;
-        j["self_improvement"]["training"]["epochs"]                             = si.training.epochs;
-        j["self_improvement"]["training"]["batch_size"]                         = si.training.batch_size;
-        j["self_improvement"]["training"]["min_episodes_for_training"]          = si.training.min_episodes_for_training;
-        j["self_improvement"]["training"]["min_quality_confidence"]             = si.training.min_quality_confidence;
-        j["self_improvement"]["training"]["adapter_output_dir"]                 = si.training.adapter_output_dir;
-        j["self_improvement"]["training"]["dataset_output_dir"]                 = si.training.dataset_output_dir;
-        j["self_improvement"]["training"]["hf_model_path"]                      = si.training.hf_model_path;
-        j["self_improvement"]["training"]["python_venv"]                        = si.training.python_venv;
+        j["self_improvement"]["meta_cognition"]["corrective_rule_confidence"]       = si.meta_cognition.corrective_rule_confidence;
+        j["self_improvement"]["training"]["enabled"]                                = si.training.enabled;
+        j["self_improvement"]["training"]["lora_rank"]                              = si.training.lora_rank;
+        j["self_improvement"]["training"]["lora_alpha"]                             = si.training.lora_alpha;
+        j["self_improvement"]["training"]["learning_rate"]                          = si.training.learning_rate;
+        j["self_improvement"]["training"]["epochs"]                                 = si.training.epochs;
+        j["self_improvement"]["training"]["batch_size"]                             = si.training.batch_size;
+        j["self_improvement"]["training"]["min_episodes_for_training"]              = si.training.min_episodes_for_training;
+        j["self_improvement"]["training"]["min_quality_confidence"]                 = si.training.min_quality_confidence;
+        j["self_improvement"]["training"]["adapter_output_dir"]                     = si.training.adapter_output_dir;
+        j["self_improvement"]["training"]["dataset_output_dir"]                     = si.training.dataset_output_dir;
+        j["self_improvement"]["training"]["hf_model_path"]                          = si.training.hf_model_path;
+        j["self_improvement"]["training"]["python_venv"]                            = si.training.python_venv;
 
         // Scheduler (v1.5.0)
         const auto& sc = config.scheduler;
@@ -796,40 +858,75 @@ namespace cardinal {
 
         // Computer use (v1.5.0)
         const auto& cu = config.computer_use;
-        j["computer_use"]["enabled"]                                       = cu.enabled;
-        j["computer_use"]["safety"]["whitelist_enabled"]                   = cu.safety.whitelist_enabled;
-        j["computer_use"]["safety"]["allowed_apps"]                        = cu.safety.allowed_apps;
-        j["computer_use"]["safety"]["allowed_domains"]                     = cu.safety.allowed_domains;
-        j["computer_use"]["safety"]["allowed_paths"]                       = cu.safety.allowed_paths;
-        j["computer_use"]["safety"]["blocked_commands"]                    = cu.safety.blocked_commands;
-        j["computer_use"]["safety"]["confirmation_required"]               = cu.safety.confirmation_required;
-        j["computer_use"]["safety"]["confirmation_timeout_seconds"]        = cu.safety.confirmation_timeout_seconds;
-        j["computer_use"]["safety"]["watch_mode"]                          = cu.safety.watch_mode;
-        j["computer_use"]["safety"]["full_autonomy"]                       = cu.safety.full_autonomy;
-        j["computer_use"]["safety"]["allow_file_write"]                    = cu.safety.allow_file_write;
-        j["computer_use"]["screen"]["screenshot_tool"]                     = cu.screen.screenshot_tool;
-        j["computer_use"]["screen"]["vision_analysis"]                     = cu.screen.vision_analysis;
-        j["computer_use"]["screen"]["watch_interval_seconds"]              = cu.screen.watch_interval_seconds;
-        j["computer_use"]["browser"]["executable"]                         = cu.browser.executable;
-        j["computer_use"]["browser"]["venv_path"]                          = cu.browser.venv_path;
-        j["computer_use"]["browser"]["playwright_timeout_ms"]              = cu.browser.playwright_timeout_ms;
-        j["computer_use"]["browser"]["headless"]                           = cu.browser.headless;
-        j["computer_use"]["browser"]["user_data_dir"]                      = cu.browser.user_data_dir;
-        j["computer_use"]["shell"]["enabled"]                              = cu.shell.enabled;
-        j["computer_use"]["shell"]["shell"]                                = cu.shell.shell;
-        j["computer_use"]["shell"]["timeout_seconds"]                      = cu.shell.timeout_seconds;
-        j["computer_use"]["shell"]["working_directory"]                    = cu.shell.working_directory;
-        j["computer_use"]["email"]["enabled"]                              = cu.email.enabled;
-        j["computer_use"]["email"]["mode"]                                 = cu.email.mode;
-        j["computer_use"]["email"]["imap_host"]                            = cu.email.imap_host;
-        j["computer_use"]["email"]["imap_port"]                            = cu.email.imap_port;
-        j["computer_use"]["email"]["smtp_host"]                            = cu.email.smtp_host;
-        j["computer_use"]["email"]["smtp_port"]                            = cu.email.smtp_port;
-        j["computer_use"]["email"]["address"]                              = cu.email.address;
-        j["computer_use"]["email"]["gmail_api_enabled"]                    = cu.email.gmail_api_enabled;
-        j["computer_use"]["email"]["gmail_credentials_path"]               = cu.email.gmail_credentials_path;
-        j["computer_use"]["atspi"]["enabled"]                              = cu.atspi.enabled;
-        j["computer_use"]["atspi"]["fallback_to_vision"]                   = cu.atspi.fallback_to_vision;
+        j["computer_use"]["enabled"]                                         = cu.enabled;
+        j["computer_use"]["safety"]["whitelist_enabled"]                     = cu.safety.whitelist_enabled;
+        j["computer_use"]["safety"]["allowed_apps"]                          = cu.safety.allowed_apps;
+        j["computer_use"]["safety"]["allowed_domains"]                       = cu.safety.allowed_domains;
+        j["computer_use"]["safety"]["allowed_paths"]                         = cu.safety.allowed_paths;
+        j["computer_use"]["safety"]["blocked_commands"]                      = cu.safety.blocked_commands;
+        j["computer_use"]["safety"]["confirmation_required"]                 = cu.safety.confirmation_required;
+        j["computer_use"]["safety"]["confirmation_timeout_seconds"]          = cu.safety.confirmation_timeout_seconds;
+        j["computer_use"]["safety"]["watch_mode"]                            = cu.safety.watch_mode;
+        j["computer_use"]["safety"]["full_autonomy"]                         = cu.safety.full_autonomy;
+        j["computer_use"]["safety"]["allow_file_write"]                      = cu.safety.allow_file_write;
+        j["computer_use"]["screen"]["screenshot_tool"]                       = cu.screen.screenshot_tool;
+        j["computer_use"]["screen"]["vision_analysis"]                       = cu.screen.vision_analysis;
+        j["computer_use"]["screen"]["watch_interval_seconds"]                = cu.screen.watch_interval_seconds;
+        j["computer_use"]["browser"]["executable"]                           = cu.browser.executable;
+        j["computer_use"]["browser"]["venv_path"]                            = cu.browser.venv_path;
+        j["computer_use"]["browser"]["playwright_timeout_ms"]                = cu.browser.playwright_timeout_ms;
+        j["computer_use"]["browser"]["headless"]                             = cu.browser.headless;
+        j["computer_use"]["browser"]["user_data_dir"]                        = cu.browser.user_data_dir;
+        j["computer_use"]["shell"]["enabled"]                                = cu.shell.enabled;
+        j["computer_use"]["shell"]["shell"]                                  = cu.shell.shell;
+        j["computer_use"]["shell"]["timeout_seconds"]                        = cu.shell.timeout_seconds;
+        j["computer_use"]["shell"]["working_directory"]                      = cu.shell.working_directory;
+        j["computer_use"]["email"]["enabled"]                                = cu.email.enabled;
+        j["computer_use"]["email"]["mode"]                                   = cu.email.mode;
+        j["computer_use"]["email"]["imap_host"]                              = cu.email.imap_host;
+        j["computer_use"]["email"]["imap_port"]                              = cu.email.imap_port;
+        j["computer_use"]["email"]["smtp_host"]                              = cu.email.smtp_host;
+        j["computer_use"]["email"]["smtp_port"]                              = cu.email.smtp_port;
+        j["computer_use"]["email"]["address"]                                = cu.email.address;
+        j["computer_use"]["email"]["gmail_api_enabled"]                      = cu.email.gmail_api_enabled;
+        j["computer_use"]["email"]["gmail_credentials_path"]                 = cu.email.gmail_credentials_path;
+        j["computer_use"]["atspi"]["enabled"]                                = cu.atspi.enabled;
+        j["computer_use"]["atspi"]["fallback_to_vision"]                     = cu.atspi.fallback_to_vision;
+
+        // Voice (v1.6.0)
+        const auto& vo = config.voice;
+        j["voice"]["enabled"]      = vo.enabled;
+        j["voice"]["input_mode"]   = voice_input_mode_to_string(vo.input_mode);
+        j["voice"]["tts_streaming"]= tts_streaming_mode_to_string(vo.tts_streaming);
+        j["voice"]["session_id"]   = vo.session_id;
+        j["voice"]["stt"]["model_path"]     = vo.stt.model_path;
+        j["voice"]["stt"]["language"]       = vo.stt.language;
+        j["voice"]["stt"]["gpu_layers"]     = vo.stt.gpu_layers;
+        j["voice"]["stt"]["threads"]        = vo.stt.threads;
+        j["voice"]["stt"]["beam_size"]      = vo.stt.beam_size;
+        j["voice"]["stt"]["initial_prompt"] = vo.stt.initial_prompt;
+        j["voice"]["tts"]["model_path"]     = vo.tts.model_path;
+        j["voice"]["tts"]["config_path"]    = vo.tts.config_path;
+        j["voice"]["tts"]["speaker_id"]     = vo.tts.speaker_id;
+        j["voice"]["tts"]["length_scale"]   = vo.tts.length_scale;
+        j["voice"]["tts"]["noise_scale"]    = vo.tts.noise_scale;
+        j["voice"]["tts"]["noise_w"]        = vo.tts.noise_w;
+        j["voice"]["tts"]["sample_rate"]    = vo.tts.sample_rate;
+        j["voice"]["vad"]["energy_threshold"]= vo.vad.energy_threshold;
+        j["voice"]["vad"]["pre_speech_ms"]  = vo.vad.pre_speech_ms;
+        j["voice"]["vad"]["post_speech_ms"] = vo.vad.post_speech_ms;
+        j["voice"]["vad"]["min_speech_ms"]  = vo.vad.min_speech_ms;
+        j["voice"]["vad"]["max_speech_ms"]  = vo.vad.max_speech_ms;
+        j["voice"]["push_to_talk"]["key"]   = vo.ptt.key;
+        j["voice"]["wake_word"]["phrase"]         = vo.wake_word.phrase;
+        j["voice"]["wake_word"]["acoustic_model"] = vo.wake_word.acoustic_model;
+        j["voice"]["wake_word"]["dictionary"]     = vo.wake_word.dictionary;
+        j["voice"]["wake_word"]["sensitivity"]    = vo.wake_word.sensitivity;
+        j["voice"]["audio"]["input_device"]       = vo.audio.input_device;
+        j["voice"]["audio"]["output_device"]      = vo.audio.output_device;
+        j["voice"]["audio"]["sample_rate"]        = vo.audio.sample_rate;
+        j["voice"]["audio"]["channels"]           = vo.audio.channels;
+        j["voice"]["audio"]["frames_per_buffer"]  = vo.audio.frames_per_buffer;
 
         // Logging
         j["logging"]["level"] = config.logging.level;

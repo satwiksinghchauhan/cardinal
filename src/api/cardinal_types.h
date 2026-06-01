@@ -34,6 +34,7 @@ namespace cardinal {
         SCHEDULER_ERROR     = 15,
         COMPUTER_USE_ERROR  = 16,
         INVALID_REQUEST     = 17,
+        VOICE_ERROR         = 18,
         INTERNAL_ERROR      = 99
     };
 

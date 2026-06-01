@@ -1,20 +1,15 @@
 #pragma once
 // =============================================================================
-// Cardinal - Config Loader (v1.5.0)
+// Cardinal - Config Loader (v1.6.0)
 // File: src/utils/config_loader.h
 //
-// Changes from v1.4.0:
-//   - SchedulerConfig           added
-//   - ComputerUseSafetyConfig   added
-//   - ComputerUseScreenConfig   added
-//   - ComputerUseBrowserConfig  added
-//   - ComputerUseShellConfig    added
-//   - ComputerUseEmailConfig    added
-//   - ComputerUseAtSpiConfig    added
-//   - ComputerUseConfig         added  (top-level wrapper)
-//   - CardinalConfig gains       scheduler + computer_use fields
-//   - ConfigLoader gains         parse_scheduler / parse_computer_use
+// Changes from v1.5.0:
+//   - #include "voice/voice_types.h"
+//   - CardinalConfig gains voice field (VoiceConfig)
+//   - ConfigLoader gains parse_voice()
 // =============================================================================
+
+#include "voice/voice_types.h"
 
 #include <string>
 #include <vector>
@@ -23,7 +18,7 @@
 namespace cardinal {
 
     // -------------------------------------------------------------------------
-    // Backend configs (unchanged)
+    // Backend configs
     // -------------------------------------------------------------------------
     struct BackendLlamaCppConfig {
         std::string model_path;
@@ -50,7 +45,7 @@ namespace cardinal {
     };
 
     // -------------------------------------------------------------------------
-    // Per-tool configs (unchanged from v1.3.0)
+    // Per-tool configs
     // -------------------------------------------------------------------------
     struct WebSearchToolConfig {
         bool        enabled               = true;
@@ -119,23 +114,23 @@ namespace cardinal {
     };
 
     // -------------------------------------------------------------------------
-    // VisionConfig (unchanged from v1.3.0)
+    // VisionConfig
     // -------------------------------------------------------------------------
     struct VisionConfig {
         std::string              model_path;
         std::string              mmproj_path;
-        int                      gpu_layers              = 0;
-        int                      threads                 = 4;
-        int                      max_tokens              = 512;
-        std::string              cache_path              = "data/vision_cache";
-        int                      cache_ttl_hours         = 24;
+        int                      gpu_layers               = 0;
+        int                      threads                  = 4;
+        int                      max_tokens               = 512;
+        std::string              cache_path               = "data/vision_cache";
+        int                      cache_ttl_hours          = 24;
         int                      download_timeout_seconds = 30;
-        bool                     confirmation_required   = false;
+        bool                     confirmation_required    = false;
         std::vector<std::string> allowed_paths;
     };
 
     // -------------------------------------------------------------------------
-    // AgentConfig (unchanged from v1.2.0)
+    // AgentConfig
     // -------------------------------------------------------------------------
     struct AgentConfig {
         bool        enabled                      = true;
@@ -150,7 +145,7 @@ namespace cardinal {
     };
 
     // -------------------------------------------------------------------------
-    // ExplainabilityConfig (unchanged from v1.2.0)
+    // ExplainabilityConfig
     // -------------------------------------------------------------------------
     struct ExplainabilityConfig {
         bool        enabled                  = true;
@@ -164,7 +159,7 @@ namespace cardinal {
     };
 
     // -------------------------------------------------------------------------
-    // SelfModelConfig (new in v1.4.0)
+    // SelfImprovementConfig (v1.4.0)
     // -------------------------------------------------------------------------
     struct SelfModelConfig {
         bool        enabled            = true;
@@ -175,49 +170,49 @@ namespace cardinal {
     };
 
     struct MetaCognitionLoaderConfig {
-        bool  enabled                            = true;
-        int   trigger_every_n_inferences         = 20;
-        float trigger_on_contradiction_rate_pct  = 30.0f;
-        bool  on_demand_via_api                  = true;
-        int   min_failures_to_reflect            = 5;
-        int   max_corrective_rules_per_session   = 10;
-        float corrective_rule_confidence         = 0.6f;
+        bool  enabled                           = true;
+        int   trigger_every_n_inferences        = 20;
+        float trigger_on_contradiction_rate_pct = 30.0f;
+        bool  on_demand_via_api                 = true;
+        int   min_failures_to_reflect           = 5;
+        int   max_corrective_rules_per_session  = 10;
+        float corrective_rule_confidence        = 0.6f;
     };
 
     struct TrainingConfig {
-        bool        enabled                          = true;
-        int         lora_rank                        = 8;
-        int         lora_alpha                       = 16;
-        float       learning_rate                    = 0.0001f;
-        int         epochs                           = 3;
-        int         batch_size                       = 4;
-        int         min_episodes_for_training        = 50;
-        float       min_quality_confidence           = 0.75f;
-        int         max_examples                     = 0;
-        int         trigger_every_n_episodes         = 100;
-        int         trigger_every_n_hours            = 24;
+        bool        enabled                            = true;
+        int         lora_rank                          = 8;
+        int         lora_alpha                         = 16;
+        float       learning_rate                      = 0.0001f;
+        int         epochs                             = 3;
+        int         batch_size                         = 4;
+        int         min_episodes_for_training          = 50;
+        float       min_quality_confidence             = 0.75f;
+        int         max_examples                       = 0;
+        int         trigger_every_n_episodes           = 100;
+        int         trigger_every_n_hours              = 24;
         float       trigger_on_domain_confidence_below = 0.5f;
-        std::string adapter_load_policy              = "session_boundary";
-        float       eval_improvement_threshold_pct   = 5.0f;
-        int         eval_holdout_episodes            = 20;
-        std::string adapter_output_dir               = "data/training/adapters";
-        std::string dataset_output_dir               = "data/training/datasets";
-        std::string export_script_dir                = "data/training/scripts";
-        std::string hf_model_path                    = "models/qwen3.5-4b-hf";
-        std::string python_venv                      = "~/cardinal/cardinal-train-venv";
-        std::string convert_lora_script              = "vendor/llama.cpp/convert_lora_to_gguf.py";
-        std::string llama_finetune_binary            = "vendor/llama.cpp/build/bin/llama-finetune";
+        std::string adapter_load_policy                = "session_boundary";
+        float       eval_improvement_threshold_pct     = 5.0f;
+        int         eval_holdout_episodes              = 20;
+        std::string adapter_output_dir                 = "data/training/adapters";
+        std::string dataset_output_dir                 = "data/training/datasets";
+        std::string export_script_dir                  = "data/training/scripts";
+        std::string hf_model_path                      = "models/qwen3.5-4b-hf";
+        std::string python_venv                        = "~/cardinal/cardinal-train-venv";
+        std::string convert_lora_script                = "vendor/llama.cpp/convert_lora_to_gguf.py";
+        std::string llama_finetune_binary              = "vendor/llama.cpp/build/bin/llama-finetune";
     };
 
     struct SelfImprovementConfig {
-        bool                     enabled        = true;
-        SelfModelConfig          self_model;
+        bool                      enabled = true;
+        SelfModelConfig           self_model;
         MetaCognitionLoaderConfig meta_cognition;
-        TrainingConfig           training;
+        TrainingConfig            training;
     };
 
     // -------------------------------------------------------------------------
-    // Unchanged structs from v1.3.0
+    // Unchanged structs
     // -------------------------------------------------------------------------
     struct InferenceConfig {
         float temperature;
@@ -295,21 +290,21 @@ namespace cardinal {
     };
 
     // -------------------------------------------------------------------------
-    // SchedulerConfig  (new in v1.5.0)
+    // SchedulerConfig (v1.5.0)
     // -------------------------------------------------------------------------
     struct SchedulerConfig {
-        bool        enabled                      = false;
-        std::string db_path                      = "data/scheduler/scheduler.db";
-        int         check_interval_seconds       = 30;
-        int         max_concurrent_tasks         = 1;
-        int         idle_threshold_minutes       = 5;
-        std::string task_session_prefix          = "scheduler_";
-        int         run_history_max_entries      = 1000;
-        int         max_task_duration_seconds    = 300;
+        bool        enabled                   = false;
+        std::string db_path                   = "data/scheduler/scheduler.db";
+        int         check_interval_seconds    = 30;
+        int         max_concurrent_tasks      = 1;
+        int         idle_threshold_minutes    = 5;
+        std::string task_session_prefix       = "scheduler_";
+        int         run_history_max_entries   = 1000;
+        int         max_task_duration_seconds = 300;
     };
 
     // -------------------------------------------------------------------------
-    // ComputerUseConfig  (new in v1.5.0)
+    // ComputerUseConfig (v1.5.0)
     // -------------------------------------------------------------------------
     struct ComputerUseSafetyConfig {
         bool                     whitelist_enabled            = true;
@@ -333,11 +328,11 @@ namespace cardinal {
     };
 
     struct ComputerUseBrowserConfig {
-        std::string executable              = "google-chrome";
-        std::string venv_path               = "~/cardinal/cardinal-browser-venv";
-        int         playwright_timeout_ms   = 10000;
-        bool        headless                = false;
-        std::string user_data_dir           = "data/browser_profile";
+        std::string executable            = "google-chrome";
+        std::string venv_path             = "~/cardinal/cardinal-browser-venv";
+        int         playwright_timeout_ms = 10000;
+        bool        headless              = false;
+        std::string user_data_dir         = "data/browser_profile";
     };
 
     struct ComputerUseShellConfig {
@@ -348,57 +343,58 @@ namespace cardinal {
     };
 
     struct ComputerUseEmailConfig {
-        bool        enabled                  = false;
-        std::string mode                     = "imap_smtp";
+        bool        enabled                = false;
+        std::string mode                   = "imap_smtp";
         std::string imap_host;
-        int         imap_port                = 993;
+        int         imap_port              = 993;
         std::string smtp_host;
-        int         smtp_port                = 587;
+        int         smtp_port              = 587;
         std::string address;
-        bool        gmail_api_enabled        = false;
-        std::string gmail_credentials_path   = "data/gmail_credentials.json";
+        bool        gmail_api_enabled      = false;
+        std::string gmail_credentials_path = "data/gmail_credentials.json";
     };
 
     struct ComputerUseAtSpiConfig {
-        bool enabled             = true;
-        bool fallback_to_vision  = true;
+        bool enabled            = true;
+        bool fallback_to_vision = true;
     };
 
     struct ComputerUseConfig {
-        bool                       enabled  = false;
-        ComputerUseSafetyConfig    safety;
-        ComputerUseScreenConfig    screen;
-        ComputerUseBrowserConfig   browser;
-        ComputerUseShellConfig     shell;
-        ComputerUseEmailConfig     email;
-        ComputerUseAtSpiConfig     atspi;
+        bool                     enabled = false;
+        ComputerUseSafetyConfig  safety;
+        ComputerUseScreenConfig  screen;
+        ComputerUseBrowserConfig browser;
+        ComputerUseShellConfig   shell;
+        ComputerUseEmailConfig   email;
+        ComputerUseAtSpiConfig   atspi;
     };
 
     // -------------------------------------------------------------------------
-    // CardinalConfig (v1.5.0)
+    // CardinalConfig (v1.6.0)
     // -------------------------------------------------------------------------
     struct CardinalConfig {
-        BackendConfig          backend;
-        InferenceConfig        inference;
-        FeelingSchemaConfig    feeling_schema;
-        MemoryConfig           memory;
-        VerifierConfig         verifier;
-        FeedbackConfig         feedback;
-        RetrieverConfig        retriever;
-        ApiConfig              api;
-        ToolsConfig            tools;
-        AgentConfig            agent;
-        ExplainabilityConfig   explainability;
-        VisionConfig           vision;
-        SelfImprovementConfig  self_improvement;
-        SchedulerConfig        scheduler;       // ← new in v1.5.0
-        ComputerUseConfig      computer_use;    // ← new in v1.5.0
-        BenchmarkConfig        benchmark;
-        LoggingConfig          logging;
+        BackendConfig         backend;
+        InferenceConfig       inference;
+        FeelingSchemaConfig   feeling_schema;
+        MemoryConfig          memory;
+        VerifierConfig        verifier;
+        FeedbackConfig        feedback;
+        RetrieverConfig       retriever;
+        ApiConfig             api;
+        ToolsConfig           tools;
+        AgentConfig           agent;
+        ExplainabilityConfig  explainability;
+        VisionConfig          vision;
+        SelfImprovementConfig self_improvement;
+        SchedulerConfig       scheduler;        // v1.5.0
+        ComputerUseConfig     computer_use;     // v1.5.0
+        VoiceConfig           voice;            // v1.6.0  ← new
+        BenchmarkConfig       benchmark;
+        LoggingConfig         logging;
     };
 
     // -------------------------------------------------------------------------
-    // ConfigLoader (v1.5.0)
+    // ConfigLoader (v1.6.0)
     // -------------------------------------------------------------------------
     class ConfigLoader {
     public:
@@ -423,8 +419,9 @@ namespace cardinal {
         static AgentConfig                parse_agent(const auto& j);
         static ExplainabilityConfig       parse_explainability(const auto& j);
         static SelfImprovementConfig      parse_self_improvement(const auto& j);
-        static SchedulerConfig            parse_scheduler(const auto& j);      // new
-        static ComputerUseConfig          parse_computer_use(const auto& j);   // new
+        static SchedulerConfig            parse_scheduler(const auto& j);
+        static ComputerUseConfig          parse_computer_use(const auto& j);
+        static VoiceConfig                parse_voice(const auto& j);    // v1.6.0 ← new
         static BenchmarkConfig            parse_benchmark(const auto& j);
         static LoggingConfig              parse_logging(const auto& j);
     };

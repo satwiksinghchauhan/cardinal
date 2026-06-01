@@ -1,32 +1,12 @@
 #pragma once
 // =============================================================================
-// Cardinal - HTTP Server (v1.5.0)
+// Cardinal - HTTP Server (v1.6.0)
 // File: src/api/http_server.h
 //
-// Changes from v1.4.0:
-//   - Scheduler endpoints (9 routes)
-//   - Computer use endpoints (5 routes)
-//   - New JSON serialization helpers for v1.5.0 types
-//
-// New endpoints:
-//   GET    /api/scheduler/status
-//   GET    /api/scheduler/tasks
-//   POST   /api/scheduler/tasks          (NL create)
-//   GET    /api/scheduler/tasks/:id
-//   PUT    /api/scheduler/tasks/:id
-//   DELETE /api/scheduler/tasks/:id
-//   POST   /api/scheduler/tasks/:id/run
-//   POST   /api/scheduler/tasks/:id/enable
-//   POST   /api/scheduler/tasks/:id/disable
-//   GET    /api/scheduler/tasks/:id/history
-//   GET    /api/scheduler/runs
-//   GET    /api/scheduler/runs/:id/actions
-//
-//   GET    /api/computer/status
-//   POST   /api/computer/screenshot
-//   POST   /api/computer/click
-//   POST   /api/computer/type
-//   POST   /api/computer/shell
+// Changes from v1.5.0:
+//   - Voice endpoints (5 routes)
+//   - voice_status_to_json() serializer
+//   - handle_voice_* handler declarations
 // =============================================================================
 
 #pragma once
@@ -44,6 +24,7 @@
 #include "self_model/self_model_types.h"
 #include "scheduler/scheduler_types.h"
 #include "computer/computer_types.h"
+#include "voice/voice_types.h"           // ← new in v1.6.0
 
 #include <string>
 #include <atomic>
@@ -75,13 +56,10 @@ namespace cardinal {
         int                port() const { return port_; }
 
     private:
-        // -- Route registration --
         void register_routes();
-
-        // -- Auth --
         bool check_auth(const httplib::Request& req, httplib::Response& res) const;
 
-        // -- Existing route handlers (v1.4.0, unchanged) --
+        // -- Existing route handlers (v1.4.0) --
         void handle_health(const httplib::Request& req, httplib::Response& res);
         void handle_chat(const httplib::Request& req, httplib::Response& res);
         void handle_reset(const httplib::Request& req, httplib::Response& res);
@@ -100,7 +78,7 @@ namespace cardinal {
         void handle_reflect(const httplib::Request& req, httplib::Response& res);
         void handle_train(const httplib::Request& req, httplib::Response& res);
 
-        // -- Scheduler handlers (new in v1.5.0) --
+        // -- Scheduler handlers (v1.5.0) --
         void handle_scheduler_status  (const httplib::Request& req, httplib::Response& res);
         void handle_scheduler_tasks_list(const httplib::Request& req, httplib::Response& res);
         void handle_scheduler_task_create(const httplib::Request& req, httplib::Response& res);
@@ -114,12 +92,19 @@ namespace cardinal {
         void handle_scheduler_runs_list (const httplib::Request& req, httplib::Response& res);
         void handle_scheduler_run_actions(const httplib::Request& req, httplib::Response& res);
 
-        // -- Computer use handlers (new in v1.5.0) --
+        // -- Computer use handlers (v1.5.0) --
         void handle_computer_status    (const httplib::Request& req, httplib::Response& res);
         void handle_computer_screenshot(const httplib::Request& req, httplib::Response& res);
         void handle_computer_click     (const httplib::Request& req, httplib::Response& res);
         void handle_computer_type      (const httplib::Request& req, httplib::Response& res);
         void handle_computer_shell     (const httplib::Request& req, httplib::Response& res);
+
+        // -- Voice handlers (v1.6.0) --
+        void handle_voice_status    (const httplib::Request& req, httplib::Response& res);
+        void handle_voice_enable    (const httplib::Request& req, httplib::Response& res);
+        void handle_voice_disable   (const httplib::Request& req, httplib::Response& res);
+        void handle_voice_speak     (const httplib::Request& req, httplib::Response& res);
+        void handle_voice_transcribe(const httplib::Request& req, httplib::Response& res);
 
         // -- JSON response helpers --
         static void        send_ok(httplib::Response& res, const std::string& json_body);
@@ -128,7 +113,7 @@ namespace cardinal {
         static std::string error_json(CardinalStatus status, const std::string& message);
         static std::string sse_event(const std::string& json_data);
 
-        // -- Existing serializers (v1.4.0) --
+        // -- Serializers (v1.4.0) --
         static std::string feeling_to_json(const FeelingInfo& f);
         static std::string chat_response_to_json(const ChatResponse& r);
         static std::string stats_to_json(const SystemStats& s);
@@ -141,7 +126,7 @@ namespace cardinal {
         static std::string self_improvement_status_to_json(const SelfImprovementStatus& s);
         static std::string reflection_result_to_json(const ReflectionResult& r);
 
-        // -- New serializers (v1.5.0) --
+        // -- Serializers (v1.5.0) --
         static std::string scheduler_status_to_json(const SchedulerStatus& s);
         static std::string scheduled_task_to_json(const ScheduledTask& t);
         static std::string task_run_to_json(const TaskRun& r);
@@ -150,12 +135,13 @@ namespace cardinal {
         static std::string screen_info_to_json(const ScreenInfo& s);
         static std::string screenshot_to_json(const Screenshot& s);
         static std::string shell_result_to_json(const ShellResult& r);
-
-        // -- Trigger/action serialization helpers --
         static std::string trigger_spec_to_json(const TriggerSpec& t);
         static std::string task_action_to_json(const TaskAction& a);
         static TriggerSpec  trigger_spec_from_json(const std::string& json);
         static TaskAction   task_action_from_json(const std::string& json);
+
+        // -- Serializers (v1.6.0) --
+        static std::string voice_status_to_json(const VoiceStatus& s);
 
         // -- Members --
         CardinalAPI&          api_;

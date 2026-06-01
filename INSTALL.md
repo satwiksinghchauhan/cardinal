@@ -1,8 +1,8 @@
-# Cardinal v1.5.0 — Installation Guide
+# Cardinal v1.6.0 — Installation Guide
 
 **Linux only. Ubuntu 24.04 LTS recommended. No git submodules — all vendor dependencies cloned manually.**
 
-v1.5.0 adds the Scheduler, Computer Use, and Watch subsystems. These require additional system packages (display tools, Python venv for Playwright, system control utilities) on top of the v1.4.0 base.
+v1.6.0 adds the Voice subsystem. This requires four new vendored libraries (whisper.cpp, piper, portaudio, pocketsphinx), two pre-build steps (piper and pocketsphinx must be built into local install prefixes before Cardinal's cmake), voice model files, and ALSA dev headers.
 
 ---
 
@@ -14,16 +14,18 @@ v1.5.0 adds the Scheduler, Computer Use, and Watch subsystems. These require add
 - [Step 2 — CUDA Toolkit](#step-2--cuda-toolkit)
 - [Step 3 — Vendor Dependencies](#step-3--vendor-dependencies)
 - [Step 4 — Build llama.cpp](#step-4--build-llamacpp)
-- [Step 5 — Download Models](#step-5--download-models)
-- [Step 6 — Build Cardinal](#step-6--build-cardinal)
-- [Step 7 — Browser Venv (Playwright)](#step-7--browser-venv-playwright)
-- [Step 8 — Training Venv (Layer 3 LoRA)](#step-8--training-venv-layer-3-lora-optional)
-- [Step 9 — Email Setup](#step-9--email-setup)
-- [Step 10 — Wayland Input (ydotool)](#step-10--wayland-input-ydotool)
-- [Step 11 — config.json](#step-11--configjson)
-- [Step 12 — Environment Variables](#step-12--environment-variables)
-- [Step 13 — Data Directories](#step-13--data-directories)
+- [Step 5 — Build Voice Vendor Libs](#step-5--build-voice-vendor-libs)
+- [Step 6 — Download Models](#step-6--download-models)
+- [Step 7 — Build Cardinal](#step-7--build-cardinal)
+- [Step 8 — Browser Venv (Playwright)](#step-8--browser-venv-playwright)
+- [Step 9 — Training Venv (Layer 3 LoRA)](#step-9--training-venv-layer-3-lora-optional)
+- [Step 10 — Email Setup](#step-10--email-setup)
+- [Step 11 — Wayland Input (ydotool)](#step-11--wayland-input-ydotool)
+- [Step 12 — config.json](#step-12--configjson)
+- [Step 13 — Environment Variables](#step-13--environment-variables)
+- [Step 14 — Data Directories](#step-14--data-directories)
 - [First Run](#first-run)
+- [Verify Voice](#verify-voice)
 - [Verify Computer Use](#verify-computer-use)
 - [Verify Scheduler](#verify-scheduler)
 - [Verify Self-Improvement (v1.4.0)](#verify-self-improvement-v140)
@@ -42,10 +44,12 @@ v1.5.0 adds the Scheduler, Computer Use, and Watch subsystems. These require add
 | CPU | Any x64, 4 cores | AMD Ryzen 7 or better |
 | RAM | 8GB | 16GB (32GB for training) |
 | GPU | NVIDIA with 4GB VRAM | RTX 3050 or better |
-| Storage | 30GB free | 60GB free |
+| Storage | 35GB free | 70GB free |
 | CUDA Compute | 7.5+ | 8.6 (RTX 30 series) |
 | Python | 3.10+ | 3.12 |
 | Display | X11 or Wayland | X11 (broader tool support) |
+| Audio | ALSA-compatible sound card | Any — PortAudio auto-detects |
+| Microphone | Any ALSA/PulseAudio mic | USB or 3.5mm |
 
 Cardinal does **not** run on AMD or Intel GPUs. NVIDIA CUDA is required.
 **Windows is not supported.**
@@ -55,10 +59,11 @@ Cardinal does **not** run on AMD or Intel GPUs. NVIDIA CUDA is required.
 ## Quick Start
 
 ```bash
-# 1. System dependencies
+# 1. System dependencies (including voice deps)
 sudo apt update
 sudo apt install -y build-essential cmake libsqlite3-dev libssl-dev swi-prolog \
     python3 python3-pip python3-venv \
+    libasound2-dev \
     scrot imagemagick xdotool wmctrl xprop \
     ydotool wtype grim \
     pulseaudio-utils brightnessctl network-manager bluez
@@ -70,25 +75,41 @@ git clone https://github.com/nlohmann/json.git nlohmann_json
 git clone https://github.com/yhirose/cpp-httplib.git
 git clone https://github.com/beltoforion/muparser.git
 git clone https://github.com/mlc-ai/tokenizers-cpp
+git clone https://github.com/ggerganov/whisper.cpp.git
+git clone https://github.com/rhasspy/piper.git
+git clone https://github.com/PortAudio/portaudio.git
+git clone https://github.com/cmusphinx/pocketsphinx.git
 
 # 3. Build llama.cpp
-cd llama.cpp && mkdir -p build && cd build
+cd ~/cardinal/vendor/llama.cpp && mkdir -p build && cd build
 cmake .. -DGGML_CUDA=ON -DLLAMA_BUILD_EXAMPLES=ON -DCMAKE_BUILD_TYPE=Release
 make -j$(nproc) && cd ~/cardinal
 
-# 4. Build Cardinal
+# 4. Pre-build piper (downloads onnxruntime, espeak-ng, fmt, spdlog automatically)
+cd vendor/piper
+cmake -B build -DCMAKE_INSTALL_PREFIX=install -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target install -j$(nproc)
+cd ~/cardinal
+
+# 5. Pre-build pocketsphinx
+cd vendor/pocketsphinx
+cmake -B build -DCMAKE_INSTALL_PREFIX=install -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target install -j$(nproc)
+cd ~/cardinal
+
+# 6. Build Cardinal
 mkdir -p build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
-make -j$(nproc)
+cmake --build . -j$(nproc)
 
-# 5. Browser venv (required for browser tool)
+# 7. Browser venv
 python3 -m venv ~/cardinal/cardinal-browser-venv
 source ~/cardinal/cardinal-browser-venv/bin/activate
 pip install playwright && playwright install chromium && playwright install-deps chromium
 deactivate
 
-# 6. Run
-cd ~/cardinal && ./build/bin/cardinal
+# 8. Run with voice
+cd ~/cardinal && ./build/bin/cardinal --voice
 ```
 
 ---
@@ -112,37 +133,54 @@ sudo apt install -y \
     python3-venv
 ```
 
+### v1.6.0 — Voice dependencies
+
+```bash
+sudo apt install -y \
+    libasound2-dev       # ALSA — required by PortAudio on Linux
+    pocketsphinx
+    pocketsphinx-en-us
+    portaudio19-dev
+    libportaudio2
+```
+
+And the ONNX Runtime for Piper (pre-built binary, don't clone):
+
+```bash
+cd ~/cardinal/vendor
+wget https://github.com/microsoft/onnxruntime/releases/download/v1.17.3/onnxruntime-linux-x64-gpu-1.17.3.tgz
+tar xzf onnxruntime-linux-x64-gpu-1.17.3.tgz
+mv onnxruntime-linux-x64-gpu-1.17.3 onnxruntime
+rm onnxruntime-linux-x64-gpu-1.17.3.tgz
+```
+
+
+That is the only new system package for voice. `onnxruntime`, `espeak-ng`, `fmt`, and `spdlog` are all downloaded and built automatically by piper's CMake during Step 5.
+
 ### v1.5.0 — Computer Use tools
 
 ```bash
 sudo apt install -y \
-    # Screenshots
     scrot \
     imagemagick \
-    # X11 input + window management
     xdotool \
     wmctrl \
-    xprop \
-    # Wayland input
+    x11-utils \
     ydotool \
     wtype \
-    # Wayland screenshots
     grim \
-    # System control
     pulseaudio-utils \
     brightnessctl \
     network-manager \
     bluez
 ```
 
-Verify:
+Verify key tools:
 
 ```bash
 cmake --version          # 3.28 or higher
-swipl --version          # SWI-Prolog 9.2.x
+swipl --version          # SWI-Prolog 9.x
 python3 --version        # 3.10+
-scrot --version          # any
-xdotool version          # any
 ```
 
 If CMake is older than 3.28:
@@ -193,17 +231,22 @@ nvidia-smi        # shows your GPU
 
 ## Step 3 — Vendor Dependencies
 
-Cardinal has no git submodules. Clone each dependency manually:
-
 ```bash
 cd ~/cardinal
 mkdir -p vendor && cd vendor
 
+# Original deps
 git clone https://github.com/ggerganov/llama.cpp.git
 git clone https://github.com/nlohmann/json.git nlohmann_json
 git clone https://github.com/yhirose/cpp-httplib.git
 git clone https://github.com/beltoforion/muparser.git
 git clone https://github.com/mlc-ai/tokenizers-cpp
+
+# v1.6.0 voice deps
+git clone https://github.com/ggerganov/whisper.cpp.git
+git clone https://github.com/rhasspy/piper.git
+git clone https://github.com/PortAudio/portaudio.git
+git clone https://github.com/cmusphinx/pocketsphinx.git
 ```
 
 | Dependency | Repository | Clone path |
@@ -212,7 +255,11 @@ git clone https://github.com/mlc-ai/tokenizers-cpp
 | nlohmann/json | https://github.com/nlohmann/json | `vendor/nlohmann_json` |
 | cpp-httplib | https://github.com/yhirose/cpp-httplib | `vendor/cpp-httplib` |
 | muparser | https://github.com/beltoforion/muparser | `vendor/muparser` |
-| muparser | https://github.com/mlc-ai/tokenizers-cpp | `vendor/tokenizers-cpp` |
+| tokenizers-cpp | https://github.com/mlc-ai/tokenizers-cpp | `vendor/tokenizers-cpp` |
+| whisper.cpp | https://github.com/ggerganov/whisper.cpp | `vendor/whisper.cpp` |
+| piper | https://github.com/rhasspy/piper | `vendor/piper` |
+| portaudio | https://github.com/PortAudio/portaudio | `vendor/portaudio` |
+| pocketsphinx | https://github.com/cmusphinx/pocketsphinx | `vendor/pocketsphinx` |
 
 ---
 
@@ -244,7 +291,73 @@ source ~/.bashrc
 
 ---
 
-## Step 5 — Download Models
+## Step 5 — Build Voice Vendor Libs
+
+Whisper.cpp is built automatically by Cardinal's CMake (`add_subdirectory`). Piper and PocketSphinx must be **pre-built** into local install prefixes because their CMake systems use `ExternalProject_Add` and are not designed for `add_subdirectory`. This is a one-time step.
+
+### 5a — Build piper
+
+Piper's build downloads its own bundled versions of `onnxruntime`, `espeak-ng`, `fmt`, and `spdlog` automatically. This step requires an internet connection and takes 5–10 minutes.
+
+```bash
+cd ~/cardinal/vendor/piper
+cmake -B build \
+      -DCMAKE_INSTALL_PREFIX=install \
+      -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target install -j$(nproc)
+```
+
+After this, `vendor/piper/install/` will contain:
+
+```
+vendor/piper/install/
+    piper                         ← the piper binary (not used directly by Cardinal)
+    libpiper_phonemize.so.1.2.0
+    libonnxruntime.so.1.14.1
+    libespeak-ng.so.1.52.0.1
+    espeak-ng-data/               ← language data for espeak-ng
+    include/                      ← piper-phonemize headers
+    pkgconfig/
+```
+
+Add piper's libs to `LD_LIBRARY_PATH` so the Cardinal binary can find them at runtime:
+
+```bash
+echo 'export LD_LIBRARY_PATH=~/cardinal/vendor/piper/install:$LD_LIBRARY_PATH' >> ~/.bashrc
+source ~/.bashrc
+```
+
+### 5b — Build pocketsphinx
+
+```bash
+cd ~/cardinal/vendor/pocketsphinx
+cmake -B build \
+      -DCMAKE_INSTALL_PREFIX=install \
+      -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target install -j$(nproc)
+```
+
+After this, `vendor/pocketsphinx/install/` will contain:
+
+```
+vendor/pocketsphinx/install/
+    lib/
+        libpocketsphinx.so
+    include/
+        pocketsphinx/
+            pocketsphinx.h
+```
+
+Add pocketsphinx's lib dir to `LD_LIBRARY_PATH`:
+
+```bash
+echo 'export LD_LIBRARY_PATH=~/cardinal/vendor/pocketsphinx/install/lib:$LD_LIBRARY_PATH' >> ~/.bashrc
+source ~/.bashrc
+```
+
+---
+
+## Step 6 — Download Models
 
 ### Primary LLM (required)
 
@@ -262,11 +375,59 @@ wget https://huggingface.co/vikhyatk/moondream2/resolve/main/moondream2-text-mod
 wget https://huggingface.co/vikhyatk/moondream2/resolve/main/moondream2-mmproj-f16.gguf
 ```
 
-Quantized alternatives at: https://huggingface.co/salivosa/moondream2-gguf
+### Voice models (v1.6.0)
+
+```bash
+mkdir -p ~/cardinal/models/voice
+cd ~/cardinal/models/voice
+```
+
+#### Whisper STT model
+
+```bash
+# Medium English model — best accuracy/speed on RTX 3050
+wget https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.en.bin
+```
+
+Smaller alternatives (less accurate, faster):
+
+```bash
+wget https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
+wget https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin
+```
+
+Update `config.json` `voice.stt.model_path` if you use a different model.
+
+#### Piper TTS voice
+
+```bash
+# Default voice: en_US-lessac-medium (warm American English, ~65MB)
+wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx
+wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json
+```
+
+Other voices are available at: https://huggingface.co/rhasspy/piper-voices
+Any voice `.onnx` + `.onnx.json` pair can be used — set `voice.tts.model_path` and `voice.tts.config_path` accordingly.
+
+#### PocketSphinx acoustic model and dictionary (wake-word mode only)
+
+Required only if using `wake_word` input mode:
+
+```bash
+mkdir -p ~/cardinal/models/voice/pocketsphinx
+
+# Download en-US acoustic model
+wget -O en-us.tar.gz \
+  https://sourceforge.net/projects/cmusphinx/files/Acoustic%20and%20Language%20Models/US%20English/cmusphinx-en-us-5.2.tar.gz/download
+tar xf en-us.tar.gz
+mv cmusphinx-en-us-5.2 ~/cardinal/models/voice/pocketsphinx/en-us
+
+# Download CMUdict
+wget -O ~/cardinal/models/voice/pocketsphinx/cmudict-en-us.dict \
+  https://raw.githubusercontent.com/cmusphinx/cmudict/master/cmudict.dict
+```
 
 ### HuggingFace weights for training (Layer 3, optional)
-
-Required only if you want LoRA fine-tuning to actually execute locally:
 
 ```bash
 pip install huggingface_hub
@@ -280,240 +441,170 @@ This downloads ~8GB. Cardinal works fully without it — Layers 1 and 2 have no 
 
 ---
 
-## Step 6 — Build Cardinal
+## Step 7 — Build Cardinal
 
 ```bash
 cd ~/cardinal
 mkdir -p build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
-make -j$(nproc)
+cmake --build . -j$(nproc)
 ```
 
 A successful build prints:
 
 ```
 -- =============================================================
--- Cardinal v1.5.0 Configuration
+-- Cardinal v1.6.0 Configuration
 -- =============================================================
 -- Build type:         Release
 -- CUDA arch:          75
 -- TensorRT backend:   OFF
--- Features:           tools + agent + explainability + vision
---                     + self-improvement (layers 1-3)
---                     + scheduler + computer use + watch
--- Output dir:         .../build/bin
+-- Voice subsystem:    ON
+-- Piper install:      /home/doctor/cardinal/vendor/piper/install
+-- PocketSphinx:       /home/doctor/cardinal/vendor/pocketsphinx/install
+-- Output dir:         /home/doctor/cardinal/build/bin
 -- =============================================================
 ```
 
-### Optional: TensorRT backend
+**To disable the voice subsystem** (e.g. on a machine without a microphone):
 
 ```bash
-cmake .. -DCMAKE_BUILD_TYPE=Release \
-    -DCARDINAL_ENABLE_TENSORRT=ON \
-    -DTRT_LLM_INCLUDE_DIR=/path/to/TensorRT-LLM/include \
-    -DTRT_LLM_LIB_DIR=/path/to/TensorRT-LLM/lib
-make -j$(nproc)
+cmake .. -DCMAKE_BUILD_TYPE=Release -DCARDINAL_ENABLE_VOICE=OFF
 ```
 
 ---
 
-## Step 7 — Browser Venv (Playwright)
+## Step 8 — Browser Venv (Playwright)
 
-Required for the `browser` tool. One-time setup:
+Required for the `browser` computer use tool:
 
 ```bash
 python3 -m venv ~/cardinal/cardinal-browser-venv
 source ~/cardinal/cardinal-browser-venv/bin/activate
-
 pip install playwright
 playwright install chromium
 playwright install-deps chromium
-
 deactivate
 ```
 
-Verify:
-
-```bash
-~/cardinal/cardinal-browser-venv/bin/python -c \
-    "from playwright.sync_api import sync_playwright; print('Playwright OK')"
-```
-
-The venv path must match `computer_use.browser.venv_path` in `config.json` (default: `~/cardinal/cardinal-browser-venv`).
+Set `computer_use.browser.venv_path` in `config.json` to `~/cardinal/cardinal-browser-venv`.
 
 ---
 
-## Step 8 — Training Venv (Layer 3 LoRA, optional)
+## Step 9 — Training Venv (Layer 3 LoRA, optional)
 
-Only needed for local LoRA fine-tuning. Skip if using TensorRT backend (script-export mode) or if you only want Layers 1 and 2.
+Required only if you want local LoRA fine-tuning:
 
 ```bash
 python3 -m venv ~/cardinal/cardinal-train-venv
 source ~/cardinal/cardinal-train-venv/bin/activate
-pip install peft transformers torch accelerate
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+pip install transformers peft datasets accelerate bitsandbytes
 deactivate
-```
-
-Verify the paths in `config.json`:
-
-```json
-"training": {
-    "python_venv": "~/cardinal/cardinal-train-venv",
-    "hf_model_path": "models/qwen3.5-4b-hf",
-    "convert_lora_script": "vendor/llama.cpp/convert_lora_to_gguf.py"
-}
 ```
 
 ---
 
-## Step 9 — Email Setup
+## Step 10 — Email Setup
 
-### Option A — IMAP/SMTP (any email provider)
-
-Set your password as an environment variable (never hardcoded in config):
+Required only if `computer_use.email.enabled=true`:
 
 ```bash
 export CARDINAL_EMAIL_PASS="your_app_password"
-# Add to ~/.bashrc to persist across reboots:
 echo 'export CARDINAL_EMAIL_PASS="your_app_password"' >> ~/.bashrc
 ```
 
-Update `config.json`:
-
-```json
-"email": {
-    "enabled": true,
-    "mode": "imap_smtp",
-    "imap_host": "imap.gmail.com",
-    "imap_port": 993,
-    "smtp_host": "smtp.gmail.com",
-    "smtp_port": 587,
-    "address": "you@gmail.com"
-}
-```
-
-> **Gmail note:** Gmail requires an App Password, not your account password.
-> Google Account → Security → 2-Step Verification → App Passwords → generate one for "Mail".
-> Use that value as `CARDINAL_EMAIL_PASS`.
-
-### Option B — Gmail REST API
-
-Install dependencies in the browser venv:
-
-```bash
-source ~/cardinal/cardinal-browser-venv/bin/activate
-pip install google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client
-deactivate
-```
-
-Set up OAuth credentials:
-1. Go to [console.cloud.google.com](https://console.cloud.google.com)
-2. Create a project → Enable the **Gmail API**
-3. Create OAuth 2.0 credentials → Desktop app
-4. Download `credentials.json` → place at `data/gmail_credentials.json`
-
-The first run will open a browser for OAuth consent. The token is saved automatically for future runs.
-
-Update `config.json`:
-
-```json
-"email": {
-    "enabled": true,
-    "mode": "gmail_api",
-    "gmail_api_enabled": true,
-    "gmail_credentials_path": "data/gmail_credentials.json",
-    "address": "you@gmail.com"
-}
-```
+For Gmail: use an **App Password** (Google Account → Security → App Passwords). Enable IMAP in Gmail settings.
 
 ---
 
-## Step 10 — Wayland Input (ydotool)
+## Step 11 — Wayland Input (ydotool)
 
-On Wayland, `ydotool` requires a running daemon with the right device permissions:
+Required only if running Wayland (not X11). `ydotool` requires the `uinput` kernel module and daemon:
 
 ```bash
-# Add your user to the input group
+sudo modprobe uinput
 sudo usermod -aG input $USER
-# Log out and back in for group change to take effect
-
-# Start the daemon
+# Re-login, then:
 sudo ydotoold &
-```
-
-Or run as a persistent systemd user service:
-
-```bash
+# Or for persistence:
 systemctl --user enable --now ydotool
 ```
 
-Verify:
-
-```bash
-ydotool type "hello"
-# Should type "hello" into whatever window is focused
-```
-
-On X11, `xdotool` needs no special setup — it works out of the box.
-
 ---
 
-## Step 11 — config.json
+## Step 12 — config.json
 
-Your existing `config.json` already has the complete v1.5.0 `scheduler` and `computer_use` blocks. Key fields to review:
+The config file lives at `~/cardinal/config.json`. The full reference is in `DOCUMENTATION.md`.
+
+### v1.6.0 voice block (add to config.json)
 
 ```json
-"scheduler": {
-    "enabled": true,
-    "db_path": "data/scheduler/scheduler.db",
-    "check_interval_seconds": 30,
-    "max_concurrent_tasks": 1,
-    "idle_threshold_minutes": 5,
-    "task_session_prefix": "scheduler_",
-    "run_history_max_entries": 1000,
-    "max_task_duration_seconds": 300
-},
-"computer_use": {
-    "enabled": true,
-    "safety": {
-        "allowed_apps": ["google-chrome", "firefox", "nautilus", "gnome-terminal"],
-        "allowed_paths": ["~/Documents", "~/Downloads", "~/Desktop", "data/"],
-        "blocked_commands": ["rm -rf /", "rm -rf ~", "mkfs", "dd if=", ":(){:|:&};:"],
-        "confirmation_required": true,
-        "full_autonomy": false,
-        "allow_file_write": false
+"voice": {
+    "enabled": false,
+    "input_mode": "vad",
+    "tts_streaming": "sentence",
+    "session_id": "voice_session",
+    "stt": {
+        "model_path": "models/voice/ggml-medium.en.bin",
+        "language": "en",
+        "gpu_layers": 8,
+        "threads": 4,
+        "beam_size": 5,
+        "initial_prompt": ""
     },
-    "browser": {
-        "venv_path": "~/cardinal/cardinal-browser-venv",
-        "headless": false
+    "tts": {
+        "model_path": "models/voice/en_US-lessac-medium.onnx",
+        "config_path": "models/voice/en_US-lessac-medium.onnx.json",
+        "speaker_id": 0,
+        "length_scale": 1.0,
+        "noise_scale": 0.667,
+        "noise_w": 0.8,
+        "sample_rate": 22050
     },
-    "shell": {
-        "enabled": true,
-        "timeout_seconds": 30,
-        "working_directory": "~"
+    "vad": {
+        "energy_threshold": 0.02,
+        "pre_speech_ms": 300,
+        "post_speech_ms": 800,
+        "min_speech_ms": 200,
+        "max_speech_ms": 30000
     },
-    "email": {
-        "enabled": false
+    "push_to_talk": {
+        "key": "space"
+    },
+    "wake_word": {
+        "phrase": "hey cardinal",
+        "acoustic_model": "models/voice/pocketsphinx/en-us",
+        "dictionary": "models/voice/pocketsphinx/cmudict-en-us.dict",
+        "sensitivity": 1e-20
+    },
+    "audio": {
+        "input_device": -1,
+        "output_device": -1,
+        "sample_rate": 16000,
+        "channels": 1,
+        "frames_per_buffer": 512
     }
 }
 ```
 
-To enable email, set `"enabled": true` and fill in the host/credentials (see Step 9).
-To allow unsupervised shell commands, set `"confirmation_required": false` in the safety block (not recommended).
-
 ---
 
-## Step 12 — Environment Variables
+## Step 13 — Environment Variables
 
 ```bash
 # Email password (required if email.enabled=true and mode=imap_smtp)
 export CARDINAL_EMAIL_PASS="your_app_password"
-
-# Persist across reboots
 echo 'export CARDINAL_EMAIL_PASS="your_app_password"' >> ~/.bashrc
 
 # llama.cpp libraries
 echo 'export LD_LIBRARY_PATH=~/cardinal/vendor/llama.cpp/build/lib:$LD_LIBRARY_PATH' >> ~/.bashrc
+
+# Piper runtime libs (flat install dir — no lib/ subdirectory)
+echo 'export LD_LIBRARY_PATH=~/cardinal/vendor/piper/install:$LD_LIBRARY_PATH' >> ~/.bashrc
+
+# PocketSphinx
+echo 'export LD_LIBRARY_PATH=~/cardinal/vendor/pocketsphinx/install/lib:$LD_LIBRARY_PATH' >> ~/.bashrc
 
 # CUDA
 echo 'export PATH=/usr/local/cuda/bin:$PATH' >> ~/.bashrc
@@ -524,12 +615,13 @@ source ~/.bashrc
 
 ---
 
-## Step 13 — Data Directories
+## Step 14 — Data Directories
 
 CMake creates these automatically on first build. To create them manually:
 
 ```bash
 mkdir -p ~/cardinal/data/{memory,self_model,scheduler,training/{adapters,datasets,scripts},explainability/exports,vision_cache,browser_profile,screenshots}
+mkdir -p ~/cardinal/models/voice/pocketsphinx
 mkdir -p ~/cardinal/logs
 ```
 
@@ -537,106 +629,152 @@ mkdir -p ~/cardinal/logs
 
 ## First Run
 
-Always run from the Cardinal root directory so relative paths in `config.json` resolve:
+Always run from the Cardinal root directory:
 
 ```bash
 cd ~/cardinal
+
+# Text mode (unchanged)
 ./build/bin/cardinal
+
+# Voice mode — VAD (from config)
+./build/bin/cardinal --voice
+
+# Voice mode — push-to-talk
+./build/bin/cardinal --voice=ptt
+
+# Voice mode — wake word ("hey cardinal")
+./build/bin/cardinal --voice=wake
 ```
 
-Expected startup output (v1.5.0):
+Expected startup output (v1.6.0 with voice):
 
 ```
 [INFO ] SelfModel: opened database at data/self_model/self_model.db
 [INFO ] SelfImprovementLoop: started
 [INFO ] VisionEncoder: ready (CPU, 4 threads)
 [INFO ] LlamaCppBackend ready - vocab: 151936, ctx: 8192
-[INFO ] ToolRegistry: 21 tools registered
+[INFO ] ToolRegistry: 22 tools registered
 [INFO ] SchedulerEngine started
 [INFO ] Computer use initialised (x11)
+[INFO ] AudioDevice init: input=0 output=1 out_rate=44100
+[INFO ] STTEngine ready — model: models/voice/ggml-medium.en.bin lang: en
+[INFO ] TTSEngine ready — model: models/voice/en_US-lessac-medium.onnx
+[INFO ] VoiceLoop started — mode=vad
   +===========================================+
-  |        C A R D I N A L  v1.5.0           |
+  |        C A R D I N A L  v1.6.0           |
   |   Neurosymbolic AGI Architecture          |
   +===========================================+
+  Voice mode active
 ```
+
+---
+
+## Verify Voice
+
+### Voice status from CLI
+
+```
+/voice status
+```
+
+Expected output:
+
+```
+  -- Voice Subsystem --
+  Active:      yes
+  Mode:        vad
+  State:       listening
+  STT ready:   yes
+  TTS ready:   yes
+  Wake ready:  no
+  Transcripts: 0
+  Utterances:  0
+```
+
+### TTS test
+
+```
+/voice speak Hello, I am Cardinal.
+```
+
+You should hear the voice through your speakers immediately.
+
+### Microphone test (VAD mode)
+
+Speak a question. Cardinal should:
+1. Detect speech onset (VAD)
+2. Record until you stop talking
+3. Transcribe with Whisper
+4. Print the transcript
+5. Run inference
+6. Speak the response via Piper
+
+### Via HTTP
+
+```bash
+# Status
+curl -s http://127.0.0.1:8080/api/voice/status \
+  -H "Authorization: Bearer secret_api_key" | python3 -m json.tool
+
+# Enable voice via API
+curl -s -X POST http://127.0.0.1:8080/api/voice/enable \
+  -H "Authorization: Bearer secret_api_key" \
+  -H "Content-Type: application/json" \
+  -d '{"input_mode": "vad"}' | python3 -m json.tool
+
+# TTS via API
+curl -s -X POST http://127.0.0.1:8080/api/voice/speak \
+  -H "Authorization: Bearer secret_api_key" \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Hello from Cardinal."}' | python3 -m json.tool
+
+# Transcribe raw PCM (16-bit signed, 16kHz mono)
+curl -s -X POST http://127.0.0.1:8080/api/voice/transcribe \
+  -H "Authorization: Bearer secret_api_key" \
+  -H "Content-Type: application/octet-stream" \
+  -H "X-Sample-Rate: 16000" \
+  --data-binary @audio.raw | python3 -m json.tool
+```
+
+### Push-to-talk test
+
+```bash
+./build/bin/cardinal --voice=ptt
+```
+
+Hold spacebar to speak, release to transcribe.
+
+### Wake word test
+
+```bash
+./build/bin/cardinal --voice=wake
+```
+
+Say "hey cardinal" — Cardinal should transition from `passive_listening` to `listening` and then record your follow-up.
 
 ---
 
 ## Verify Computer Use
 
-### Screenshots
-
-```
-You: take a screenshot
-```
-
-Cardinal should capture the screen, save it to `data/screenshots/`, and (if vision is configured) describe what it sees.
-
-Via HTTP:
-
 ```bash
+# Status
+curl -s http://127.0.0.1:8080/api/computer/status \
+  -H "Authorization: Bearer secret_api_key"
+# Returns: {"width":1920,"height":1080,"server":"x11","display_var":":0"}
+
+# Screenshot
 curl -s -X POST http://127.0.0.1:8080/api/computer/screenshot \
   -H "Authorization: Bearer secret_api_key" \
   -H "Content-Type: application/json" \
   -d '{"analyze": true}' | python3 -m json.tool
 ```
 
-### Status
-
-```bash
-curl -s http://127.0.0.1:8080/api/computer/status \
-  -H "Authorization: Bearer secret_api_key"
-# Returns: {"width":1920,"height":1080,"server":"x11","display_var":":0"}
-```
-
-Or from the CLI:
-
-```
-/computer
-```
-
-### Open an app
-
-```
-You: open the calculator
-```
-
-### Click something
-
-```
-You: click on the Submit button
-You: click at coordinates 500, 300
-```
-
-### Browser
-
-Requires the Playwright venv (Step 7):
-
-```
-You: open google.com in the browser
-You: search for latest news
-```
+Or from CLI: `/computer`
 
 ---
 
 ## Verify Scheduler
-
-### From chat
-
-```
-You: remind me to check the weather every day at 8am
-You: search for Python tutorials every Sunday at 10am and save to a file
-You: list my scheduled tasks
-```
-
-### CLI
-
-```
-/scheduler
-/tasks
-```
-
-### HTTP
 
 ```bash
 # List tasks
@@ -648,37 +786,17 @@ curl -s -X POST http://127.0.0.1:8080/api/scheduler/tasks \
   -H "Authorization: Bearer secret_api_key" \
   -H "Content-Type: application/json" \
   -d '{"description": "search for AI news every morning at 7am"}' | python3 -m json.tool
-
-# Scheduler status
-curl -s http://127.0.0.1:8080/api/scheduler/status \
-  -H "Authorization: Bearer secret_api_key"
 ```
+
+Or from CLI: `/scheduler` and `/tasks`
 
 ---
 
 ## Verify Self-Improvement (v1.4.0)
 
-### Layer 1 — Self-Model
-
 ```bash
-curl -s http://127.0.0.1:8080/api/self_model \
-  -H "Authorization: Bearer secret_api_key" | python3 -m json.tool
-```
-
-### Layer 2 — Meta-Cognition
-
-```bash
-curl -s -X POST http://127.0.0.1:8080/api/reflect \
-  -H "Authorization: Bearer secret_api_key" | python3 -m json.tool
-```
-
-### Layer 3 — Training
-
-```bash
-curl -s -X POST http://127.0.0.1:8080/api/train \
-  -H "Authorization: Bearer secret_api_key" \
-  -H "Content-Type: application/json" \
-  -d '{"domain_hint": ""}' | python3 -m json.tool
+curl -s http://127.0.0.1:8080/api/self_model -H "Authorization: Bearer secret_api_key" | python3 -m json.tool
+curl -s -X POST http://127.0.0.1:8080/api/reflect -H "Authorization: Bearer secret_api_key" | python3 -m json.tool
 ```
 
 ---
@@ -696,10 +814,8 @@ You: describe data/test.jpg
 ## Verify HTTP API
 
 ```bash
-# Health — no auth
 curl http://127.0.0.1:8080/api/health
 
-# Chat
 curl -X POST http://127.0.0.1:8080/api/chat \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer secret_api_key" \
@@ -712,24 +828,26 @@ curl -X POST http://127.0.0.1:8080/api/chat \
 
 | Problem | Fix |
 |---------|-----|
+| `libasound2-dev not found` | `sudo apt install libasound2-dev` |
+| `AudioDevice init failed` | Check microphone is connected; try `aplay -l` and `arecord -l` |
+| `STTEngine: failed to load model` | Verify `models/voice/ggml-medium.en.bin` exists |
+| `TTSEngine: failed to load voice` | Verify both `.onnx` and `.onnx.json` files exist |
+| No audio output | Check output device with `aplay -l`; set `audio.output_device` to correct index |
+| Voice not transcribing | Lower `vad.energy_threshold` (try `0.01`); check microphone input level |
+| STT slow | Reduce `stt.beam_size` to 1 or 2; or use `ggml-base.en.bin` instead of medium |
+| `libpiper_phonemize.so not found` | Add `vendor/piper/install` to `LD_LIBRARY_PATH` |
+| `libpocketsphinx.so not found` | Add `vendor/pocketsphinx/install/lib` to `LD_LIBRARY_PATH` |
+| Wake word never triggers | Check acoustic model path; lower `sensitivity` (e.g. `1e-30`) |
+| Push-to-talk not responding | Terminal must have focus; space key captures stdin in raw mode |
+| Piper build fails — onnxruntime download error | Check internet access during `cmake --build build --target install` |
+| Pocketsphinx build: `BISON/FLEX not found` | `sudo apt install bison flex` then rebuild |
 | `scrot: command not found` | `sudo apt install scrot` |
 | `xdotool: command not found` | `sudo apt install xdotool` |
-| `wmctrl: command not found` | `sudo apt install wmctrl` |
-| `grim: command not found` (Wayland) | `sudo apt install grim` |
 | `ydotool: /dev/uinput permission denied` | `sudo usermod -aG input $USER` then re-login |
-| `ydotool: daemon not running` | `sudo ydotoold &` or `systemctl --user enable --now ydotool` |
-| `browser: Playwright not found` | Run Step 7 (browser venv setup) |
-| `email: authentication failed` | Use Gmail App Password, not account password |
-| `email: CARDINAL_EMAIL_PASS not set` | `export CARDINAL_EMAIL_PASS="..."` |
-| `open_app: failed to launch` | Check app is installed; try full executable name |
-| Scheduler tasks not firing | Verify `check_interval_seconds` in config; check task is enabled |
-| Display not detected | Set `DISPLAY=:0` (X11) or `WAYLAND_DISPLAY=wayland-0` |
+| `browser: Playwright not found` | Run Step 8 (browser venv setup) |
 | `mtmd.h not found` during CMake | Rebuild llama.cpp with `-DLLAMA_BUILD_EXAMPLES=ON` |
-| `libmtmd.so not found` at runtime | Add llama.cpp/build/lib to `LD_LIBRARY_PATH` |
-| `CUDA out of memory` | Reduce `gpu_layers` in `config.json` |
-| Self-model DB not created | Ensure `self_improvement.enabled=true`; DB created on first chat |
+| `CUDA out of memory` | Reduce `gpu_layers` in `config.json` and/or `voice.stt.gpu_layers` |
 | Reflection returns `ran=false` | Lower `min_failures_to_reflect` to 1 for testing |
-| Training returns `accepted=false` | Check `training.enabled=true`; check cycle isn't already running |
 
 ---
 
@@ -742,15 +860,9 @@ curl -X POST http://127.0.0.1:8080/api/chat \
 }
 ```
 
-To disable auth for local development:
-
-```json
-"api": { "auth_enabled": false }
-```
-
 ---
 
-## Directory Reference (v1.5.0)
+## Directory Reference (v1.6.0)
 
 ```
 ~/cardinal/
@@ -761,44 +873,68 @@ To disable auth for local development:
         memory/
             rules.json, knowledge.json, episodes.db
         self_model/
-            self_model.db              ← Layer 1 SQLite
+            self_model.db
         training/
-            adapters/                  ← trained GGUF adapters
-            datasets/                  ← curated JSONL datasets
-            scripts/                   ← TensorRT training scripts
+            adapters/, datasets/, scripts/
         scheduler/
-            scheduler.db               ← tasks, runs, action_logs  ← NEW v1.5.0
+            scheduler.db
         explainability/
             audit.db, exports/
         vision_cache/
-        browser_profile/               ← Playwright browser profile ← NEW v1.5.0
-        screenshots/                   ← computer use screenshots   ← NEW v1.5.0
+        browser_profile/
+        screenshots/
     logs/
         cardinal.log, episodic.log
     models/
         Qwen_Qwen3.5-4B-Q4_K_M.gguf
-        qwen3.5-4b-hf/                 ← HF weights for Layer 3
+        qwen3.5-4b-hf/
         vision/
             moondream2-text-model-f16.gguf
             moondream2-mmproj-f16.gguf
+        voice/                                   ← NEW v1.6.0
+            ggml-medium.en.bin                   ← Whisper STT model
+            en_US-lessac-medium.onnx             ← Piper TTS model
+            en_US-lessac-medium.onnx.json        ← Piper voice config
+            pocketsphinx/                        ← Wake word (optional)
+                en-us/                           ← Acoustic model
+                cmudict-en-us.dict               ← Pronunciation dictionary
     src/
         api/
         agent/
-        computer/                      ← NEW v1.5.0
-        scheduler/                     ← NEW v1.5.0
-        watch/                         ← NEW v1.5.0
-        tools/builtin/computer/        ← NEW v1.5.0
+        computer/
+        scheduler/
+        watch/
+        voice/                                   ← NEW v1.6.0
+            audio_device.h/.cpp
+            vad_detector.h/.cpp
+            stt_engine.h/.cpp
+            tts_engine.h/.cpp
+            wake_word_detector.h/.cpp
+            voice_loop.h/.cpp
+        tools/
+            builtin/
+                computer/
+                voice/                           ← NEW v1.6.0
+                    tool_voice_control.h/.cpp
         self_model/, training/
         core/, memory/, verifier/, vision/
-        tools/, explainability/, learning/
+        explainability/, learning/
+        utils/
     vendor/
         llama.cpp/
         nlohmann_json/
         cpp-httplib/
         muparser/
         tokenizers-cpp/
-    cardinal-browser-venv/             ← Playwright venv   ← NEW v1.5.0
-    cardinal-train-venv/               ← PEFT training venv
+        onnxruntime/                             ← NEW v1.6.0
+        whisper.cpp/                             ← NEW v1.6.0
+        piper/                                   ← NEW v1.6.0
+            install/                             ← pre-built libs + espeak-ng-data
+        portaudio/                               ← NEW v1.6.0
+        pocketsphinx/                            ← NEW v1.6.0
+            install/                             ← pre-built lib + headers
+    cardinal-browser-venv/
+    cardinal-train-venv/
     config.json
     CMakeLists.txt
     README.md, INSTALL.md, DOCUMENTATION.md
