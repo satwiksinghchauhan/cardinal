@@ -1179,8 +1179,7 @@ These behaviors emerged from the architecture without explicit programming. They
 
 ## License & Copyright
 
-Copyright © 2025–2026 Satwik Singh Chauhan. All rights reserved.
-Cardinal is **not open source**. See `LICENSE` for details.
+Copyright © 2026 Satwik Singh Chauhan. All rights reserved.
 
 ---
 

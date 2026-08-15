@@ -1,57 +1,20 @@
-PROPRIETARY LICENSE
-Copyright (C) 2026 Satwik Singh (Cardinal AGI). All Rights Reserved.
+MIT License
 
-This software and its associated code, documentation, and related materials
-(collectively, the "Software") are proprietary and confidential.
+Copyright (c) 2026 Satwik Singh Chauhan
 
-1. NO GRANT OF LICENSE
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-No license is granted to any person or entity to view, access, use, copy,
-modify, distribute, or otherwise interact with the Software unless a
-separate, written, signed agreement has been executed between you and the
-copyright holder.
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 
-Any viewing, access, or use of the Software without a signed agreement is
-strictly prohibited and constitutes a violation of this license.
-
-2. RESTRICTIONS
-
-You may NOT, under any circumstances:
-
-a) Copy, reproduce, or distribute the Software or any portion thereof
-b) Modify, adapt, translate, or create derivative works from the Software
-c) Reverse engineer, decompile, disassemble, or otherwise attempt to derive
-   source code from any compiled or executable portions of the Software
-d) Use the Software to train, develop, or improve any competing AI system
-e) Remove or alter any copyright, proprietary, or confidentiality notices
-f) Sublicense, rent, lease, lend, or transfer the Software to any third party
-g) Use the Software for any commercial purpose
-
-3. OWNERSHIP
-
-The Software is licensed, not sold. Satwik Singh (Cardinal AGI) retains all
-right, title, and interest in and to the Software, including all intellectual
-property rights therein. No implied licenses are granted.
-
-4. NO WARRANTY
-
-THE SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF MERCHANTABILITY, FITNESS
-FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT.
-
-5. TERMINATION
-
-This license terminates automatically upon any violation. Upon termination,
-you must destroy all copies of the Software in your possession.
-
-6. GOVERNING LAW
-
-This license shall be governed by the laws of India, without regard to its
-conflict of law provisions.
-
-7. ACKNOWLEDGMENT
-
-By viewing, accessing, or using the Software, you acknowledge that you have
-read, understood, and agree to be bound by these terms.
-
-Contact: satwik3289@gmail.com
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
